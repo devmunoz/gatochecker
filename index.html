@@ -150,30 +150,46 @@
     btn.classList.toggle('active', isLive);
     btn.textContent = isLive ? '⏹' : '▶';
 
+    if (isLive) {
+      const url = `/stream?host=${encodeURIComponent(h)}&t=${t}`;
+      status.className = 'status';
+      status.textContent = 'Connecting RTSP…';
+      const target = (zoomDlg.open && zoomDlg.dataset.host === h) ? zoomImg : img;
+      target.onload = () => { status.className = 'status ok'; status.textContent = 'LIVE'; };
+      target.onerror = () => { status.className = 'status err'; status.textContent = 'Offline'; };
+      if (zoomDlg.open && zoomDlg.dataset.host === h) {
+        img.removeAttribute('src');
+        zoomImg.src = url;
+        zoomLiveBtn.classList.add('active');
+        zoomLiveBtn.textContent = '⏹';
+      } else {
+        img.src = url;
+      }
+      return;
+    }
+
     const snapBase = capsMap[h]?.default_snapshot || `http://${h}/cgi-bin/snapshot.sh?res=high`;
-    const sep = snapBase.includes('?') ? '&' : '?';
-    const url = isLive
-      ? `/stream?host=${encodeURIComponent(h)}&t=${t}`
-      : `${snapBase}${sep}t=${t}`;
+    const url = `${snapBase}${snapBase.includes('?') ? '&' : '?'}t=${t}`;
     status.className = 'status';
-    status.textContent = isLive ? 'Connecting RTSP…' : 'Updating…';
-    img.onload = () => {
+    status.textContent = 'Updating…';
+    const loader = new Image();
+    loader.onload = () => {
+      if (liveHosts.has(h)) return;
+      img.src = url;
+      if (zoomDlg.open && zoomDlg.dataset.host === h) {
+        zoomImg.src = url;
+        zoomLiveBtn.classList.remove('active');
+        zoomLiveBtn.textContent = '▶';
+      }
       status.className = 'status ok';
-      status.textContent = isLive ? 'LIVE' : new Date().toLocaleTimeString();
+      status.textContent = new Date().toLocaleTimeString();
     };
-    img.onerror = () => {
+    loader.onerror = () => {
+      if (liveHosts.has(h)) return;
       status.className = 'status err';
       status.textContent = 'Offline';
     };
-    if (zoomDlg.open && zoomDlg.dataset.host === h) {
-      if (isLive) img.removeAttribute('src');
-      else img.src = url;
-      zoomImg.src = url;
-      zoomLiveBtn.classList.toggle('active', isLive);
-      zoomLiveBtn.textContent = isLive ? '⏹' : '▶';
-    } else {
-      img.src = url;
-    }
+    loader.src = url;
   }
 
   function renderActionIcons(h) {
@@ -231,8 +247,11 @@
     const isLive = liveHosts.has(h);
     zoomDlg.dataset.host = h;
     zoomTitle.textContent = h;
+    zoomLiveBtn.classList.toggle('active', isLive);
+    zoomLiveBtn.textContent = isLive ? '⏹' : '▶';
     zoomDlg.showModal();
-    applyCardSource(img.closest('.cam'));
+    if (isLive) applyCardSource(img.closest('.cam'));
+    else zoomImg.src = img.src;
   };
   zoomDlg.onclose = () => {
     zoomImg.removeAttribute('src');
