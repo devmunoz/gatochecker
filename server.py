@@ -8,7 +8,7 @@ import sys
 from urllib.parse import parse_qs, urlparse
 
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
-FFMPEG = shutil.which("ffmpeg") or "/Users/duni/.local/bin/ffmpeg"
+FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 
 
 def get_hosts():
