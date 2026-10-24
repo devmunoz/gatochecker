@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GatoChecker</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #111; color: #eee; }
+  body { margin: 0; padding: 1rem; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: .5rem; }
+  h1 { margin: 0; font-size: 1.25rem; }
+  .controls { display: flex; gap: .6rem; align-items: center; font-size: .9rem; }
+  button, select, input { background: #222; color: #eee; border: 1px solid #444; padding: .4rem .7rem; border-radius: 6px; font: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #333; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 1rem; }
+  .cam { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; overflow: hidden; cursor: grab; }
+  .cam.dragging, #host-list li.dragging { opacity: .4; border-style: dashed; }
+  .cam-bar { display: flex; justify-content: space-between; align-items: center; padding: .5rem .75rem; font-size: .85rem; background: #222; gap: .5rem; }
+  .cam-links { display: flex; gap: .5rem; align-items: center; }
+  .cam-bar a { color: #7abaff; text-decoration: none; font-weight: 600; }
+  .live-btn { font-size: .75rem; background: #2a3441; padding: .15rem .5rem; border-radius: 4px; border: 1px solid #3b495c; }
+  .live-btn.active { background: #dc2626; border-color: #ef4444; color: #fff; }
+  .status.ok { color: #4ade80; }
+  .status.err { color: #f87171; }
+  .cam img { width: 100%; aspect-ratio: 16/9; object-fit: contain; background: #000; display: block; cursor: zoom-in; }
+  dialog { background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 8px; padding: 1rem; width: min(400px, 90vw); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog h2 { margin: 0 0 .75rem; font-size: 1.1rem; }
+  .field { margin-bottom: .9rem; display: flex; flex-direction: column; gap: .35rem; font-size: .9rem; }
+  #host-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .35rem; max-height: 220px; overflow-y: auto; }
+  #host-list li { display: flex; justify-content: space-between; align-items: center; background: #222; padding: .35rem .6rem; border-radius: 6px; cursor: grab; }
+  .add-row, .dialog-actions { display: flex; gap: .5rem; }
+  .add-row input { flex: 1; }
+  .dialog-actions { justify-content: flex-end; margin-top: 1rem; }
+  #zoom { width: 96vw; height: 92vh; max-width: 96vw; max-height: 92vh; padding: 0; background: #000; overflow: hidden; }
+  #zoom[open] { display: flex; flex-direction: column; }
+  #zoom img { flex: 1; width: 100%; min-height: 0; object-fit: contain; cursor: zoom-out; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐱 GatoChecker</h1>
+  <div class="controls">
+    <label>Auto:
+      <select id="interval">
+        <option value="0">Off</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+        <option value="30000">30s</option>
+        <option value="60000">60s</option>
+      </select>
+    </label>
+    <button id="refresh">Refresh</button>
+    <button id="open-admin" title="Settings">⚙️</button>
+  </div>
+</header>
+<main id="grid"></main>
+
+<dialog id="admin">
+  <h2>Settings</h2>
+  <div class="field">
+    <label for="cfg-refresh">Default refresh</label>
+    <select id="cfg-refresh">
+      <option value="0">Off</option>
+      <option value="5000">5s</option>
+      <option value="10000">10s</option>
+      <option value="30000">30s</option>
+      <option value="60000">60s</option>
+    </select>
+  </div>
+  <div class="field">
+    <label>Cameras (`hosts.json`)</label>
+    <ul id="host-list"></ul>
+    <div class="add-row">
+      <input id="new-host" placeholder="e.g. litterbox.cam">
+      <button type="button" id="add-host">+ Add</button>
+    </div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" id="cancel-admin">Cancel</button>
+    <button type="button" id="save-admin">Save</button>
+  </div>
+</dialog>
+
+<dialog id="zoom">
+  <div class="cam-bar">
+    <div class="cam-links">
+      <strong id="zoom-title"></strong>
+      <button type="button" class="live-btn" id="zoom-live">▶ RTSP</button>
+    </div>
+    <button type="button" id="close-zoom">✕</button>
+  </div>
+  <img id="zoom-img" alt="" draggable="false">
+</dialog>
+
+<script type="module">
+  const grid = document.getElementById('grid');
+  const intervalSel = document.getElementById('interval');
+  const adminDlg = document.getElementById('admin');
+  const zoomDlg = document.getElementById('zoom');
+  const zoomImg = document.getElementById('zoom-img');
+  const zoomTitle = document.getElementById('zoom-title');
+  const zoomLiveBtn = document.getElementById('zoom-live');
+  const cfgRefresh = document.getElementById('cfg-refresh');
+  const hostListEl = document.getElementById('host-list');
+  const newHostInput = document.getElementById('new-host');
+  let timer = null;
+  let config = { refresh: 10000, hosts: [] };
+  let draftHosts = [];
+  let initialized = false;
+  const liveHosts = new Set();
+
+  async function loadConfig() {
+    const raw = await fetch('./hosts.json', { cache: 'no-store' }).then(r => r.json());
+    config = Array.isArray(raw) ? { refresh: 10000, hosts: raw } : { refresh: raw.refresh ?? 10000, hosts: raw.hosts ?? [] };
+    if (!initialized) {
+      intervalSel.value = String(config.refresh);
+      initialized = true;
+    }
+  }
+
+  async function saveConfig(refresh, hosts) {
+    const res = await fetch('./hosts.json', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh, hosts })
+    });
+    if (res.ok) config = { refresh, hosts };
+    return res.ok;
+  }
+
+  function applyCardSource(card, t = Date.now()) {
+    const h = card.dataset.host;
+    const img = card.querySelector('img');
+    const status = card.querySelector('.status');
+    const btn = card.querySelector('.live-btn');
+    const isLive = liveHosts.has(h);
+    btn.classList.toggle('active', isLive);
+    btn.textContent = isLive ? '⏹ RTSP' : '▶ RTSP';
+
+    const url = isLive
+      ? `/stream?host=${encodeURIComponent(h)}&t=${t}`
+      : `http://${h}/cgi-bin/snapshot.sh?res=high&t=${t}`;
+
+    status.className = 'status';
+    status.textContent = isLive ? 'Connecting RTSP…' : 'Updating…';
+    img.onload = () => {
+      status.className = 'status ok';
+      status.textContent = isLive ? 'LIVE' : new Date().toLocaleTimeString();
+    };
+    img.onerror = () => {
+      status.className = 'status err';
+      status.textContent = 'Offline';
+    };
+    if (zoomDlg.open && zoomDlg.dataset.host === h) {
+      if (isLive) img.removeAttribute('src');
+      else img.src = url;
+      zoomImg.src = url;
+      zoomLiveBtn.classList.toggle('active', isLive);
+      zoomLiveBtn.textContent = isLive ? '⏹ RTSP' : '▶ RTSP';
+    } else {
+      img.src = url;
+    }
+  }
+
+  async function refreshAll() {
+    await loadConfig();
+    const current = [...grid.querySelectorAll('.cam')].map(c => c.dataset.host);
+    if (JSON.stringify(config.hosts) !== JSON.stringify(current)) {
+      grid.innerHTML = config.hosts.map(h => `
+        <article class="cam" draggable="true" data-host="${h}">
+          <div class="cam-bar">
+            <div class="cam-links">
+              <span title="Drag to reorder">⠿</span>
+              <a href="http://${h}" target="_blank" rel="noopener">${h}</a>
+              <button type="button" class="live-btn" data-live="${h}">▶ RTSP</button>
+            </div>
+            <span class="status">Loading…</span>
+          </div>
+          <img alt="${h}" draggable="false">
+        </article>
+      `).join('');
+    }
+
+    const t = Date.now();
+    for (const card of grid.querySelectorAll('.cam')) {
+      if (!liveHosts.has(card.dataset.host) || !card.querySelector('img').getAttribute('src')) {
+        applyCardSource(card, t);
+      }
+    }
+  }
+
+  function toggleLive(h) {
+    if (liveHosts.has(h)) liveHosts.delete(h);
+    else liveHosts.add(h);
+    const card = grid.querySelector(`.cam[data-host="${CSS.escape(h)}"]`);
+    if (card) applyCardSource(card);
+  }
+
+  grid.onclick = (e) => {
+    const liveBtn = e.target.closest('.live-btn');
+    if (liveBtn) return toggleLive(liveBtn.dataset.live);
+    const img = e.target.closest('.cam img');
+    if (!img) return;
+    const h = img.closest('.cam').dataset.host;
+    const isLive = liveHosts.has(h);
+    zoomDlg.dataset.host = h;
+    zoomTitle.textContent = h;
+    zoomDlg.showModal();
+    applyCardSource(img.closest('.cam'));
+  };
+  zoomDlg.onclose = () => {
+    zoomImg.removeAttribute('src');
+    const card = grid.querySelector(`.cam[data-host="${CSS.escape(zoomDlg.dataset.host || '')}"]`);
+    if (card && liveHosts.has(card.dataset.host)) applyCardSource(card);
+  };
+  zoomLiveBtn.onclick = () => toggleLive(zoomDlg.dataset.host);
+  zoomImg.onclick = () => zoomDlg.close();
+  document.getElementById('close-zoom').onclick = () => zoomDlg.close();
+  zoomDlg.onclick = (e) => { if (e.target === zoomDlg) zoomDlg.close(); };
+
+  function enableDragSort(container, itemSel, onSorted) {
+    let dragged = null;
+    container.addEventListener('dragstart', (e) => {
+      dragged = e.target.closest(itemSel);
+      if (dragged) dragged.classList.add('dragging');
+    });
+    container.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const target = e.target.closest(itemSel);
+      if (!dragged || !target || target === dragged) return;
+      const items = [...container.querySelectorAll(itemSel)];
+      if (items.indexOf(dragged) < items.indexOf(target)) target.after(dragged);
+      else target.before(dragged);
+    });
+    container.addEventListener('dragend', () => {
+      if (!dragged) return;
+      dragged.classList.remove('dragging');
+      dragged = null;
+      onSorted([...container.querySelectorAll(itemSel)]);
+    });
+  }
+
+  enableDragSort(grid, '.cam', (items) => {
+    const next = items.map(c => c.dataset.host);
+    if (JSON.stringify(next) !== JSON.stringify(config.hosts)) {
+      saveConfig(config.refresh, next);
+    }
+  });
+
+  enableDragSort(hostListEl, 'li', (items) => {
+    draftHosts = items.map(li => li.dataset.host);
+    renderDraftHosts();
+  });
+
+  function renderDraftHosts() {
+    hostListEl.innerHTML = draftHosts.map((h, i) => `
+      <li draggable="true" data-host="${h}">
+        <span>⠿ ${h}</span>
+        <button type="button" data-rm="${i}" title="Remove">✕</button>
+      </li>
+    `).join('');
+  }
+
+  hostListEl.onclick = (e) => {
+    const idx = e.target.dataset.rm;
+    if (idx !== undefined) {
+      draftHosts.splice(Number(idx), 1);
+      renderDraftHosts();
+    }
+  };
+
+  function addDraftHost() {
+    const val = newHostInput.value.trim();
+    if (val && !draftHosts.includes(val)) {
+      draftHosts.push(val);
+      newHostInput.value = '';
+      renderDraftHosts();
+    }
+  }
+
+  document.getElementById('add-host').onclick = addDraftHost;
+  newHostInput.onkeydown = (e) => { if (e.key === 'Enter') addDraftHost(); };
+
+  document.getElementById('open-admin').onclick = async () => {
+    await loadConfig();
+    cfgRefresh.value = String(config.refresh);
+    draftHosts = [...config.hosts];
+    renderDraftHosts();
+    adminDlg.showModal();
+  };
+
+  document.getElementById('cancel-admin').onclick = () => adminDlg.close();
+
+  document.getElementById('save-admin').onclick = async () => {
+    addDraftHost();
+    const refresh = Number(cfgRefresh.value);
+    if (!(await saveConfig(refresh, draftHosts))) {
+      return alert('Failed to save hosts.json (run python3 server.py)');
+    }
+    intervalSel.value = String(refresh);
+    resetTimer();
+    adminDlg.close();
+    await refreshAll();
+  };
+
+  function resetTimer() {
+    clearInterval(timer);
+    const ms = Number(intervalSel.value);
+    if (ms > 0) timer = setInterval(refreshAll, ms);
+  }
+
+  document.getElementById('refresh').onclick = refreshAll;
+  intervalSel.onchange = resetTimer;
+  await refreshAll();
+  resetTimer();
+</script>
+</body>
+</html>
