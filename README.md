@@ -8,10 +8,9 @@ A lightweight, zero-dependency camera dashboard and control panel for cameras ru
 
 ## Features
 
-- **Unified Snapshot Grid**: Fetches high-resolution snapshots (`http://{host}/cgi-bin/snapshot.sh?res=high`) across all configured cameras with configurable auto-refresh.
-- **Inline RTSP Live Streaming**: Toggle `▶ RTSP` on any camera card (or inside the zoom modal) to stream `rtsp://{host}/ch0_1.h264` directly in the browser via `ffmpeg` (`multipart/x-mixed-replace`).
-- **Near-Fullscreen Zoom Modal**: Click any camera to inspect it in a `96vw × 92vh` modal without duplicate RTSP connections.
-- **Drag-and-Drop Reordering**: Reorder cameras directly in the main grid or inside the settings modal; changes persist immediately to `hosts.json`.
+- **Unified Snapshot Grid**: Fetches high-resolution snapshots across all configured cameras with configurable auto-refresh.
+- **Inline RTSP Live Streaming**: Toggle `▶ RTSP` on any camera card (or inside the zoom modal) to stream directly in the browser via `ffmpeg`.
+- **Drag-and-Drop Reordering**: Reorder cameras directly in the main grid or inside the settings modal.
 - **In-App Settings (`⚙️`)**: Add, remove, and reorder cameras and configure the default refresh interval directly from the web UI.
 
 ## Requirements
