@@ -12,6 +12,8 @@ FFMPEG = shutil.which("ffmpeg") or "/Users/duni/.local/bin/ffmpeg"
 
 
 def get_hosts():
+    if not HOSTS_FILE.exists():
+        return []
     raw = json.loads(HOSTS_FILE.read_text())
     return raw if isinstance(raw, list) else raw.get("hosts", [])
 
@@ -19,17 +21,23 @@ def get_hosts():
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/hosts.json" and not HOSTS_FILE.exists():
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            return self.wfile.write(b'{"refresh":10000,"hosts":[]}')
         if parsed.path != "/stream":
             return super().do_GET()
         host = parse_qs(parsed.query).get("host", [""])[0]
         if host not in get_hosts():
             return self.send_error(403, "Unknown host")
+        rtsp_host = urlparse(f"http://{host}").hostname or host
 
         # ponytail: ffmpeg RTSP->MJPEG over HTTP; switch to mediamtx/WebRTC only if audio or 30fps+ is needed
         proc = subprocess.Popen(
             [
                 FFMPEG, "-loglevel", "error", "-rtsp_transport", "tcp",
-                "-i", f"rtsp://{host}/ch0_1.h264",
+                "-i", f"rtsp://{rtsp_host}/ch0_1.h264",
                 "-r", "10", "-q:v", "5", "-f", "mpjpeg", "pipe:1",
             ],
             stdout=subprocess.PIPE,

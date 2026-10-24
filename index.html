@@ -73,7 +73,7 @@
     <label>Cameras (`hosts.json`)</label>
     <ul id="host-list"></ul>
     <div class="add-row">
-      <input id="new-host" placeholder="e.g. litterbox.cam">
+      <input id="new-host" placeholder="e.g. 192.168.1.50 or camera.local">
       <button type="button" id="add-host">+ Add</button>
     </div>
   </div>
@@ -111,9 +111,13 @@
   let initialized = false;
   const liveHosts = new Set();
 
+  const normalizeHost = (h) => String(h).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+
   async function loadConfig() {
-    const raw = await fetch('./hosts.json', { cache: 'no-store' }).then(r => r.json());
-    config = Array.isArray(raw) ? { refresh: 10000, hosts: raw } : { refresh: raw.refresh ?? 10000, hosts: raw.hosts ?? [] };
+    const res = await fetch('./hosts.json', { cache: 'no-store' });
+    const raw = res.ok ? await res.json() : { refresh: 10000, hosts: [] };
+    const list = (Array.isArray(raw) ? raw : (raw.hosts ?? [])).map(normalizeHost).filter(Boolean);
+    config = { refresh: Array.isArray(raw) ? 10000 : (raw.refresh ?? 10000), hosts: list };
     if (!initialized) {
       intervalSel.value = String(config.refresh);
       initialized = true;
@@ -272,7 +276,7 @@
   };
 
   function addDraftHost() {
-    const val = newHostInput.value.trim();
+    const val = normalizeHost(newHostInput.value);
     if (val && !draftHosts.includes(val)) {
       draftHosts.push(val);
       newHostInput.value = '';
