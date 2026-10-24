@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -6,9 +7,11 @@ import shutil
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlparse
+from urllib.request import urlopen
 
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+CAPS_CACHE = {}
 
 
 def get_hosts():
@@ -18,6 +21,39 @@ def get_hosts():
     return raw if isinstance(raw, list) else raw.get("hosts", [])
 
 
+def get_host_caps(host):
+    if host in CAPS_CACHE:
+        return CAPS_CACHE[host]
+    rtsp_host = urlparse(f"http://{host}").hostname or host
+    try:
+        with urlopen(f"http://{host}/cgi-bin/links.sh", timeout=2) as resp:
+            links = json.loads(resp.read().decode())
+        hi_snap = f"http://{host}/cgi-bin/snapshot.sh?res=high" if "high_res_snapshot" in links else None
+        lo_snap = f"http://{host}/cgi-bin/snapshot.sh?res=low" if "low_res_snapshot" in links else None
+        hi_path = urlparse(links["high_res_stream"]).path if "high_res_stream" in links else None
+        lo_path = urlparse(links["low_res_stream"]).path if "low_res_stream" in links else None
+        hi_stream = f"rtsp://{rtsp_host}{hi_path}" if hi_path else None
+        lo_stream = f"rtsp://{rtsp_host}{lo_path}" if lo_path else None
+        caps = {
+            "high_res_snapshot": hi_snap,
+            "low_res_snapshot": lo_snap,
+            "high_res_stream": hi_stream,
+            "low_res_stream": lo_stream,
+            "default_snapshot": hi_snap or lo_snap or f"http://{host}/cgi-bin/snapshot.sh?res=high",
+            "default_stream": lo_stream or hi_stream or f"rtsp://{rtsp_host}/ch0_0.h264",
+        }
+        CAPS_CACHE[host] = caps
+        return caps
+    except Exception:
+        return {
+            "high_res_snapshot": f"http://{host}/cgi-bin/snapshot.sh?res=high",
+            "low_res_snapshot": None,
+            "high_res_stream": f"rtsp://{rtsp_host}/ch0_0.h264",
+            "low_res_stream": None,
+            "default_snapshot": f"http://{host}/cgi-bin/snapshot.sh?res=high",
+            "default_stream": f"rtsp://{rtsp_host}/ch0_0.h264",
+        }
+
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -26,18 +62,34 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             return self.wfile.write(b'{"refresh":10000,"hosts":[]}')
+        if parsed.path == "/capabilities":
+            hosts = get_hosts()
+            with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
+                caps = dict(zip(hosts, pool.map(get_host_caps, hosts)))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(json.dumps(caps).encode())
         if parsed.path != "/stream":
             return super().do_GET()
-        host = parse_qs(parsed.query).get("host", [""])[0]
+        params = parse_qs(parsed.query)
+        host = params.get("host", [""])[0]
         if host not in get_hosts():
             return self.send_error(403, "Unknown host")
-        rtsp_host = urlparse(f"http://{host}").hostname or host
+        caps = get_host_caps(host)
+        res_pref = params.get("res", [""])[0]
+        stream_url = (
+            caps["high_res_stream"] if res_pref == "high" and caps["high_res_stream"]
+            else caps["low_res_stream"] if res_pref == "low" and caps["low_res_stream"]
+            else caps["default_stream"]
+        )
 
         # ponytail: ffmpeg RTSP->MJPEG over HTTP; switch to mediamtx/WebRTC only if audio or 30fps+ is needed
         proc = subprocess.Popen(
             [
                 FFMPEG, "-loglevel", "error", "-rtsp_transport", "tcp",
-                "-i", f"rtsp://{rtsp_host}/ch0_1.h264",
+                "-i", stream_url,
                 "-r", "10", "-q:v", "5", "-f", "mpjpeg", "pipe:1",
             ],
             stdout=subprocess.PIPE,
