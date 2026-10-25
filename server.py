@@ -56,6 +56,7 @@ def detect_cats(raw_bytes, host=""):
         w_img, h_img = img.size
         min_conf = get_config().get("min_conf", 18) / 100.0
         conf_thresh = 0.07 if DEBUG else min_conf
+        scales = (640, 960) if is_rtdetr else (1280,)
         results = [
             YOLO_MODEL.predict(img, conf=0.07, imgsz=sz, device=DEVICE, verbose=False)[0]
             for sz in scales
