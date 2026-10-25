@@ -63,7 +63,7 @@ function applyCardSource(card, t = Date.now()) {
     const url = `/stream?host=${encodeURIComponent(h)}&t=${t}`;
     if (status) {
       status.className = 'status';
-      status.textContent = 'Connecting RTSP…';
+      status.textContent = 'Connecting…';
     }
     img.onload = () => {
       card.classList.remove('offline');
@@ -121,6 +121,7 @@ function renderActionIcons(h) {
   const c = capsMap[h] || {};
   return [
     `<button type="button" class="icon-btn live-btn" data-live="${h}" title="Live RTSP stream in browser">▶</button>`,
+    `<button type="button" class="icon-btn snap-refresh-btn" data-refresh="${h}" title="Refresh snapshot">🔄</button>`,
     `<a class="icon-btn" href="http://${h}" target="_blank" rel="noopener" title="Open Yi-Hack web interface">⚙️</a>`,
     c.high_res_stream ? `<a class="icon-btn" href="${c.high_res_stream}" title="Open High-Res RTSP stream">🎥<sub>H</sub></a>` : '',
     c.low_res_stream ? `<a class="icon-btn" href="${c.low_res_stream}" title="Open Low-Res RTSP stream">🎥<sub>L</sub></a>` : '',
@@ -169,9 +170,17 @@ function toggleLive(h) {
   if (card) applyCardSource(card);
 }
 
+function refreshHost(h) {
+  liveHosts.delete(h);
+  const card = grid.querySelector(`.cam[data-host="${CSS.escape(h)}"]`);
+  if (card) applyCardSource(card, Date.now());
+}
+
 grid.onclick = (e) => {
   const liveBtn = e.target.closest('.live-btn');
   if (liveBtn) return toggleLive(liveBtn.dataset.live);
+  const refreshBtn = e.target.closest('.snap-refresh-btn');
+  if (refreshBtn) return refreshHost(refreshBtn.dataset.refresh);
   const img = e.target.closest('.cam img');
   if (!img) return;
   const card = img.closest('.cam');
@@ -198,6 +207,7 @@ zoomDlg.onclose = () => {
   zoomedPlaceholder = null;
 };
 zoomLiveBtn.onclick = () => toggleLive(zoomDlg.dataset.host);
+document.getElementById('zoom-refresh').onclick = () => refreshHost(zoomDlg.dataset.host);
 document.getElementById('close-zoom').onclick = () => zoomDlg.close();
 zoomDlg.onclick = (e) => { if (e.target === zoomDlg || e.target === zoomedImg) zoomDlg.close(); };
 
