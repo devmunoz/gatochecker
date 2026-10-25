@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 DEBUG = "--debug" in sys.argv or "-v" in sys.argv or os.environ.get("DEBUG") in ("1", "true", "True")
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
-MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", "yolo11s.pt"))
+MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", "rtdetr-l.pt"))
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 CAPS_CACHE = {}
 DETECTIONS = {}
@@ -24,51 +24,70 @@ YOLO_MODEL = None
 
 try:
     from PIL import Image
-    from ultralytics import YOLO
+    import torch
+    from ultralytics import RTDETR, YOLO
+    DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
 except ImportError:
     venv_py = Path(__file__).with_name(".venv") / "bin" / "python"
     if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
-        import os
         os.execv(str(venv_py), [str(venv_py), *sys.argv])
     YOLO = None
+    DEVICE = "cpu"
 
 
+def _iou(b1, b2):
+    x1, y1 = max(b1[0], b2[0]), max(b1[1], b2[1])
+    x2, y2 = min(b1[0] + b1[2], b2[0] + b2[2]), min(b1[1] + b1[3], b2[1] + b2[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    if inter <= 0:
+        return 0.0
+    return inter / (b1[2] * b1[3] + b2[2] * b2[3] - inter)
 def detect_cats(raw_bytes, host=""):
     global YOLO_MODEL
     if YOLO is None:
         return []
     t0 = time.time()
-    # ponytail: global lock around YOLOv8n inference; move to process pool if >10 cameras refresh simultaneously
+    is_rtdetr = "rtdetr" in MODEL_FILE.name.lower()
+    # ponytail: global lock around model inference; move to process pool if >10 cameras refresh simultaneously
     with YOLO_LOCK:
         if YOLO_MODEL is None:
-            YOLO_MODEL = YOLO(str(MODEL_FILE))
+            YOLO_MODEL = RTDETR(str(MODEL_FILE)) if is_rtdetr else YOLO(str(MODEL_FILE))
         img = Image.open(io.BytesIO(raw_bytes))
-        conf_thresh = 0.05 if DEBUG else 0.18
-        res = YOLO_MODEL.predict(img, conf=conf_thresh, imgsz=1280, augment=True, verbose=False)[0]
+        conf_thresh = 0.08 if DEBUG else 0.15
+        scales = (640, 960) if is_rtdetr else (1280,)
+        results = [
+            YOLO_MODEL.predict(img, conf=conf_thresh, imgsz=sz, device=DEVICE, verbose=False)[0]
+            for sz in scales
+        ]
     elapsed = round((time.time() - t0) * 1000, 1)
-    cats = []
+    raw_cats = []
     near_cats = []
     others = []
-    for b in res.boxes:
-        cls_id = int(b.cls.item())
-        conf = float(b.conf.item())
-        name = YOLO_MODEL.names[cls_id]
-        if cls_id == 15 and conf >= 0.18:
-            x, y, w, h = b.xywhn[0].tolist()
-            cats.append({
-                "conf": round(conf, 2),
-                "box": [round(x - w / 2, 4), round(y - h / 2, 4), round(w, 4), round(h, 4)],
-            })
-        elif DEBUG:
-            if cls_id in (14, 15, 16, 21, 77) and conf >= 0.05:
-                near_cats.append(f"{name} {round(conf * 100)}%")
-            elif conf >= 0.25:
-                others.append(f"{name} {round(conf * 100)}%")
+    for idx, res in enumerate(results):
+        for b in res.boxes:
+            cls_id = int(b.cls.item())
+            conf = float(b.conf.item())
+            name = YOLO_MODEL.names[cls_id]
+            if cls_id == 15 and conf >= 0.15:
+                x, y, w, h = b.xywhn[0].tolist()
+                raw_cats.append({
+                    "conf": round(conf, 2),
+                    "box": [round(max(0.0, x - w / 2), 4), round(max(0.0, y - h / 2), 4), round(w, 4), round(h, 4)],
+                })
+            elif DEBUG and idx == 0:
+                if cls_id in (14, 15, 16, 21, 77) and conf >= 0.08:
+                    near_cats.append(f"{name} {round(conf * 100)}%")
+                elif conf >= 0.30:
+                    others.append(f"{name} {round(conf * 100)}%")
+    cats = []
+    for cand in sorted(raw_cats, key=lambda c: c["conf"], reverse=True):
+        if not any(_iou(cand["box"], kept["box"]) > 0.35 for kept in cats):
+            cats.append(cand)
     if DEBUG:
         cat_str = ", ".join([f"{round(c['conf'] * 100)}%" for c in cats]) if cats else "none"
         near_str = f" | candidates: {', '.join(near_cats)}" if near_cats else ""
-        other_str = f" | scene: {', '.join(others)}" if others else ""
-        sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms{near_str}{other_str}\n")
+        other_str = f" | scene: {', '.join(others[:6])}" if others else ""
+        sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms ({DEVICE}){near_str}{other_str}\n")
     return cats
 
 def get_hosts():
