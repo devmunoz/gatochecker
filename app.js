@@ -54,11 +54,13 @@ function applyCardSource(card, t = Date.now()) {
     btn.classList.toggle('active', isLive);
     btn.textContent = isLive ? '⏹' : '▶';
   }
+  const refreshBtn = card.querySelector('.snap-refresh-btn');
+  if (refreshBtn) refreshBtn.disabled = isLive;
   if (zoomDlg.open && zoomDlg.dataset.host === h) {
     zoomLiveBtn.classList.toggle('active', isLive);
     zoomLiveBtn.textContent = isLive ? '⏹' : '▶';
+    document.getElementById('zoom-refresh').disabled = isLive;
   }
-
   if (isLive) {
     const url = `/stream?host=${encodeURIComponent(h)}&t=${t}`;
     if (status) {
@@ -117,17 +119,15 @@ function applyCardSource(card, t = Date.now()) {
   loader.src = url;
 }
 
-function renderActionIcons(h) {
+function renderBottomLinks(h) {
   const c = capsMap[h] || {};
   return [
-    `<button type="button" class="icon-btn live-btn" data-live="${h}" title="Live RTSP stream in browser">▶</button>`,
-    `<button type="button" class="icon-btn snap-refresh-btn" data-refresh="${h}" title="Refresh snapshot">🔄</button>`,
+    c.high_res_stream ? `<a class="icon-btn" href="${c.high_res_stream}" title="Open High-Res RTSP stream">🎥<sub>+</sub></a>` : '',
+    c.low_res_stream ? `<a class="icon-btn" href="${c.low_res_stream}" title="Open Low-Res RTSP stream">🎥</a>` : '',
+    c.high_res_snapshot ? `<a class="icon-btn" href="${c.high_res_snapshot}" target="_blank" rel="noopener" title="Open High-Res Snapshot in new tab">📷<sub>+</sub></a>` : '',
+    c.low_res_snapshot ? `<a class="icon-btn" href="${c.low_res_snapshot}" target="_blank" rel="noopener" title="Open Low-Res Snapshot in new tab">📷</a>` : '',
     `<a class="icon-btn" href="http://${h}" target="_blank" rel="noopener" title="Open Yi-Hack web interface">⚙️</a>`,
-    c.high_res_stream ? `<a class="icon-btn" href="${c.high_res_stream}" title="Open High-Res RTSP stream">🎥<sub>H</sub></a>` : '',
-    c.low_res_stream ? `<a class="icon-btn" href="${c.low_res_stream}" title="Open Low-Res RTSP stream">🎥<sub>L</sub></a>` : '',
-    c.high_res_snapshot ? `<a class="icon-btn" href="${c.high_res_snapshot}" target="_blank" rel="noopener" title="Open High-Res Snapshot in new tab">📷<sub>H</sub></a>` : '',
-    c.low_res_snapshot ? `<a class="icon-btn" href="${c.low_res_snapshot}" target="_blank" rel="noopener" title="Open Low-Res Snapshot in new tab">📷<sub>L</sub></a>` : '',
-  ].join('');
+  ].filter(Boolean).join('');
 }
 
 async function refreshAll() {
@@ -141,7 +141,8 @@ async function refreshAll() {
           <div class="cam-links">
             <span title="Drag to reorder">⠿</span>
             <span class="cam-host">${h}</span>
-            ${renderActionIcons(h)}
+            <button type="button" class="icon-btn live-btn" data-live="${h}" title="Live RTSP stream in browser">▶</button>
+            <button type="button" class="icon-btn snap-refresh-btn" data-refresh="${h}" title="Refresh snapshot">🔄</button>
           </div>
           <span class="status">Loading…</span>
         </div>
@@ -149,6 +150,9 @@ async function refreshAll() {
           <div class="spinner"></div>
           <span class="offline-badge">📷 Offline</span>
           <img alt="${h}" draggable="false">
+        </div>
+        <div class="cam-footer">
+          ${renderBottomLinks(h)}
         </div>
       </article>
     `).join('');
@@ -171,7 +175,7 @@ function toggleLive(h) {
 }
 
 function refreshHost(h) {
-  liveHosts.delete(h);
+  if (liveHosts.has(h)) return;
   const card = grid.querySelector(`.cam[data-host="${CSS.escape(h)}"]`);
   if (card) applyCardSource(card, Date.now());
 }
@@ -190,7 +194,7 @@ grid.onclick = (e) => {
   zoomTitle.textContent = h;
   zoomLiveBtn.classList.toggle('active', isLive);
   zoomLiveBtn.textContent = isLive ? '⏹' : '▶';
-
+  document.getElementById('zoom-refresh').disabled = isLive;
   zoomedImg = img;
   zoomedPlaceholder = document.createElement('div');
   zoomedPlaceholder.className = 'cam-placeholder';
