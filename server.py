@@ -3,14 +3,17 @@ from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+DEBUG = "--debug" in sys.argv or "-v" in sys.argv or os.environ.get("DEBUG") in ("1", "true", "True")
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
 MODEL_FILE = Path(__file__).with_name("yolo11n.pt")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -30,23 +33,37 @@ except ImportError:
     YOLO = None
 
 
-def detect_cats(raw_bytes):
+def detect_cats(raw_bytes, host=""):
     global YOLO_MODEL
     if YOLO is None:
         return []
+    t0 = time.time()
     # ponytail: global lock around YOLOv8n inference; move to process pool if >10 cameras refresh simultaneously
     with YOLO_LOCK:
         if YOLO_MODEL is None:
             YOLO_MODEL = YOLO(str(MODEL_FILE))
         img = Image.open(io.BytesIO(raw_bytes))
-        res = YOLO_MODEL.predict(img, classes=[15], conf=0.20, imgsz=960, verbose=False)[0]
+        conf_thresh = 0.10 if DEBUG else 0.20
+        res = YOLO_MODEL.predict(img, conf=conf_thresh, imgsz=960, verbose=False)[0]
+    elapsed = round((time.time() - t0) * 1000, 1)
     cats = []
+    others = []
     for b in res.boxes:
-        x, y, w, h = b.xywhn[0].tolist()
-        cats.append({
-            "conf": round(float(b.conf.item()), 2),
-            "box": [round(x - w / 2, 4), round(y - h / 2, 4), round(w, 4), round(h, 4)],
-        })
+        cls_id = int(b.cls.item())
+        conf = float(b.conf.item())
+        name = YOLO_MODEL.names[cls_id]
+        if cls_id == 15 and conf >= 0.20:
+            x, y, w, h = b.xywhn[0].tolist()
+            cats.append({
+                "conf": round(conf, 2),
+                "box": [round(x - w / 2, 4), round(y - h / 2, 4), round(w, 4), round(h, 4)],
+            })
+        elif DEBUG and conf >= 0.15:
+            others.append(f"{name} {round(conf * 100)}%")
+    if DEBUG:
+        cat_str = ", ".join([f"{round(c['conf'] * 100)}%" for c in cats]) if cats else "none"
+        other_str = f" | other: {', '.join(others)}" if others else ""
+        sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms{other_str}\n")
     return cats
 
 def get_hosts():
@@ -127,7 +144,7 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 sys.stderr.write(f"Snapshot error for {host} ({snap_url}): {e}\n")
                 return self.send_error(502, f"Camera unreachable: {e}")
-            cats = detect_cats(raw)
+            cats = detect_cats(raw, host=host)
             DETECTIONS[host] = {"cat": bool(cats), "cats": cats}
             self.send_response(200)
             self.send_header("Content-Type", ctype)
@@ -191,6 +208,7 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    print(f"GatoChecker listening on http://127.0.0.1:{port}")
+    port_args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    port = int(port_args[0]) if port_args else 8000
+    print(f"GatoChecker listening on http://127.0.0.1:{port}" + (" [ML DEBUG ON]" if DEBUG else ""))
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

@@ -32,7 +32,7 @@ python3 server.py [port]
 ## Usage
 
 ```sh
-python3 server.py [port]
+python3 server.py [port] [--debug]
+# or: DEBUG=1 python3 server.py
 ```
-
 Then open `http://127.0.0.1:8000` in your browser.
