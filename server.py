@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
 MODEL_FILE = Path(__file__).with_name("yolov8n.pt")
@@ -61,7 +61,8 @@ def get_host_caps(host):
         return CAPS_CACHE[host]
     rtsp_host = urlparse(f"http://{host}").hostname or host
     try:
-        with urlopen(f"http://{host}/cgi-bin/links.sh", timeout=2) as resp:
+        req = Request(f"http://{host}/cgi-bin/links.sh", headers={"User-Agent": "GatoChecker/1.0"})
+        with urlopen(req, timeout=5) as resp:
             links = json.loads(resp.read().decode())
         hi_snap = f"http://{host}/cgi-bin/snapshot.sh?res=high" if "high_res_snapshot" in links else None
         lo_snap = f"http://{host}/cgi-bin/snapshot.sh?res=low" if "low_res_snapshot" in links else None
@@ -119,11 +120,13 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_error(403, "Unknown host")
             snap_url = get_host_caps(host)["default_snapshot"]
             try:
-                with urlopen(snap_url, timeout=5) as resp:
+                req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
+                with urlopen(req, timeout=15) as resp:
                     raw = resp.read()
                     ctype = resp.headers.get("Content-Type", "image/jpeg")
-            except Exception:
-                return self.send_error(502, "Camera unreachable")
+            except Exception as e:
+                sys.stderr.write(f"Snapshot error for {host} ({snap_url}): {e}\n")
+                return self.send_error(502, f"Camera unreachable: {e}")
             cats = detect_cats(raw)
             DETECTIONS[host] = {"cat": bool(cats), "cats": cats}
             self.send_response(200)

@@ -133,7 +133,7 @@ function applyCardSource(card, t = Date.now()) {
       status.className = 'status err';
       status.textContent = 'Offline';
     }
-  }, 12000);
+  }, 16000);
   loader.onload = () => {
     clearTimeout(timeoutId);
     if (liveHosts.has(h)) return;
