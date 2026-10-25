@@ -16,9 +16,18 @@ A lightweight, zero-dependency camera dashboard and control panel for cameras ru
 
 ## Requirements
 
-- Python 3 (`uv venv --python 3.12 .venv && uv pip install ultralytics` for YOLOv8n cat detection; `server.py` auto-switches to `.venv` if present)
+- Python 3.10+
+- `requirements.txt` dependencies (`ultralytics`)
 - `ffmpeg` (optional, required only for `▶` live streaming)
 - One or more cameras running [yi-hack-Allwinner-v2](https://github.com/roleoroleo/yi-hack-Allwinner-v2)
+
+## Quickstart
+
+```sh
+uv venv --python 3.12 .venv && uv pip install -r requirements.txt
+# or: python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+python3 server.py [port]
+```
 
 ## Usage
 
