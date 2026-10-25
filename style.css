@@ -2,7 +2,10 @@
 body { margin: 0; padding: 1rem; }
 header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: .5rem; }
 h1 { margin: 0; font-size: 1.25rem; }
-.controls { display: flex; gap: .6rem; align-items: center; font-size: .9rem; }
+.controls { display: flex; gap: .6rem; align-items: center; font-size: .9rem; flex-wrap: wrap; }
+.autosort-label { display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; user-select: none; padding: .35rem .6rem; background: #222; border: 1px solid #444; border-radius: 6px; font-size: .9rem; }
+.autosort-label:has(input:checked) { background: #78350f; border-color: #f59e0b; color: #fde68a; font-weight: 600; }
+.autosort-label input { margin: 0; cursor: pointer; }
 button, select, input { background: #222; color: #eee; border: 1px solid #444; padding: .4rem .7rem; border-radius: 6px; font: inherit; }
 button { cursor: pointer; }
 button:hover { background: #333; }

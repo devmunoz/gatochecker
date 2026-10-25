@@ -1,5 +1,6 @@
 const grid = document.getElementById('grid');
 const intervalSel = document.getElementById('interval');
+const autosortCheckbox = document.getElementById('autosort');
 const adminDlg = document.getElementById('admin');
 const zoomDlg = document.getElementById('zoom');
 let zoomedImg = null;
@@ -15,6 +16,7 @@ let timer = null;
 let config = { refresh: 10000, min_conf: 18, hosts: [] };
 let capsMap = {};
 let draftHosts = [];
+let latestDetections = {};
 let initialized = false;
 const liveHosts = new Set();
 
@@ -31,6 +33,7 @@ async function loadConfig() {
   config = { refresh: raw.refresh ?? 10000, min_conf: raw.min_conf ?? 18, hosts: list };
   if (!initialized) {
     intervalSel.value = String(config.refresh);
+    autosortCheckbox.checked = localStorage.getItem('gatochecker_autosort') === '1';
     initialized = true;
   }
 }
@@ -45,14 +48,46 @@ async function saveConfig(refresh, min_conf, hosts) {
   return res.ok;
 }
 
+function applyAutoSort() {
+  if (!autosortCheckbox.checked) return;
+  const cards = [...grid.querySelectorAll('.cam')];
+  if (cards.length <= 1) return;
+  function getScore(card) {
+    const h = card.dataset.host;
+    if (liveHosts.has(h)) return { count: 0, maxConf: 0 };
+    if (latestDetections[h]?.cats?.length) {
+      const cats = latestDetections[h].cats;
+      return { count: cats.length, maxConf: Math.max(...cats.map(c => c.conf)) };
+    }
+    if (card.classList.contains('has-cat')) {
+      const text = card.querySelector('.cat-badge')?.textContent || '';
+      const m = text.match(/🐱\s*(?:(\d+)\s*·\s*)?(\d+)%/);
+      if (m) {
+        return { count: m[1] ? Number(m[1]) : 1, maxConf: Number(m[2]) / 100 };
+      }
+      return { count: 1, maxConf: 0.5 };
+    }
+    return { count: 0, maxConf: 0 };
+  }
+  const sortedCards = [...cards].sort((ca, cb) => {
+    const sa = getScore(ca);
+    const sb = getScore(cb);
+    if (sb.count !== sa.count) return sb.count - sa.count;
+    if (sa.count > 0 && sb.maxConf !== sa.maxConf) return sb.maxConf - sa.maxConf;
+    return config.hosts.indexOf(ca.dataset.host) - config.hosts.indexOf(cb.dataset.host);
+  });
+  const curIds = cards.map(c => c.dataset.host).join(',');
+  const newIds = sortedCards.map(c => c.dataset.host).join(',');
+  if (curIds !== newIds) grid.append(...sortedCards);
+}
+
 async function updateDetections(host, card, img) {
   try {
     const res = await fetch('./detections', { cache: 'no-store' });
     if (!res.ok) return;
-    const all = await res.json();
-    const det = all[host];
+    latestDetections = await res.json();
+    const det = latestDetections[host];
     const cats = (!liveHosts.has(host) && det?.cats) ? det.cats : [];
-    card.classList.toggle('has-cat', cats.length > 0);
     const badge = card.querySelector('.cat-badge');
     if (badge && cats.length) {
       const maxConf = Math.round(Math.max(...cats.map(c => c.conf)) * 100);
@@ -81,6 +116,7 @@ async function updateDetections(host, card, img) {
     if (zoomDlg.open && zoomDlg.dataset.host === host) {
       syncZoomDetections(host, img);
     }
+    applyAutoSort();
   } catch {}
 }
 
@@ -307,6 +343,10 @@ function enableDragSort(container, itemSel, onSorted) {
 enableDragSort(grid, '.cam', (items) => {
   const next = items.map(c => c.dataset.host);
   if (JSON.stringify(next) !== JSON.stringify(config.hosts)) {
+    if (autosortCheckbox.checked) {
+      autosortCheckbox.checked = false;
+      localStorage.setItem('gatochecker_autosort', '0');
+    }
     saveConfig(config.refresh, config.min_conf, next);
   }
 });
@@ -413,5 +453,15 @@ function resetTimer() {
 
 document.getElementById('refresh').onclick = refreshAll;
 intervalSel.onchange = resetTimer;
+autosortCheckbox.onchange = () => {
+  localStorage.setItem('gatochecker_autosort', autosortCheckbox.checked ? '1' : '0');
+  if (autosortCheckbox.checked) {
+    applyAutoSort();
+  } else {
+    const cards = [...grid.querySelectorAll('.cam')];
+    cards.sort((a, b) => config.hosts.indexOf(a.dataset.host) - config.hosts.indexOf(b.dataset.host));
+    grid.append(...cards);
+  }
+};
 await refreshAll();
 resetTimer();
