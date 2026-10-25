@@ -35,13 +35,13 @@ except ImportError:
     DEVICE = "cpu"
 
 
-def _iou(b1, b2):
+def _overlap(b1, b2):
     x1, y1 = max(b1[0], b2[0]), max(b1[1], b2[1])
     x2, y2 = min(b1[0] + b1[2], b2[0] + b2[2]), min(b1[1] + b1[3], b2[1] + b2[3])
     inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
     if inter <= 0:
         return 0.0
-    return inter / (b1[2] * b1[3] + b2[2] * b2[3] - inter)
+    return inter / min(b1[2] * b1[3], b2[2] * b2[3])
 def detect_cats(raw_bytes, host=""):
     global YOLO_MODEL
     if YOLO is None:
@@ -53,35 +53,57 @@ def detect_cats(raw_bytes, host=""):
         if YOLO_MODEL is None:
             YOLO_MODEL = RTDETR(str(MODEL_FILE)) if is_rtdetr else YOLO(str(MODEL_FILE))
         img = Image.open(io.BytesIO(raw_bytes))
-        conf_thresh = 0.08 if DEBUG else 0.15
+        w_img, h_img = img.size
         scales = (640, 960) if is_rtdetr else (1280,)
         results = [
-            YOLO_MODEL.predict(img, conf=conf_thresh, imgsz=sz, device=DEVICE, verbose=False)[0]
+            YOLO_MODEL.predict(img, conf=0.07, imgsz=sz, device=DEVICE, verbose=False)[0]
             for sz in scales
         ]
-    elapsed = round((time.time() - t0) * 1000, 1)
-    raw_cats = []
-    near_cats = []
-    others = []
-    for idx, res in enumerate(results):
-        for b in res.boxes:
-            cls_id = int(b.cls.item())
-            conf = float(b.conf.item())
-            name = YOLO_MODEL.names[cls_id]
-            if cls_id == 15 and conf >= 0.15:
+        raw_cats = []
+        near_cats = []
+        others = []
+        zoom_centers = []
+        for idx, res in enumerate(results):
+            for b in res.boxes:
+                cls_id = int(b.cls.item())
+                conf = float(b.conf.item())
+                name = YOLO_MODEL.names[cls_id]
                 x, y, w, h = b.xywhn[0].tolist()
-                raw_cats.append({
-                    "conf": round(conf, 2),
-                    "box": [round(max(0.0, x - w / 2), 4), round(max(0.0, y - h / 2), 4), round(w, 4), round(h, 4)],
-                })
-            elif DEBUG and idx == 0:
-                if cls_id in (14, 15, 16, 21, 77) and conf >= 0.08:
-                    near_cats.append(f"{name} {round(conf * 100)}%")
-                elif conf >= 0.30:
+                box = [round(max(0.0, x - w / 2), 4), round(max(0.0, y - h / 2), 4), round(w, 4), round(h, 4)]
+                if cls_id == 15 and conf >= 0.16:
+                    raw_cats.append({"conf": round(conf, 2), "box": box})
+                elif cls_id in (14, 15, 16, 21, 77) and conf >= 0.08:
+                    if idx == 0:
+                        near_cats.append(f"{name} {round(conf * 100)}%")
+                    if not any(abs(x - cx) < 0.20 and abs(y - cy) < 0.20 for cx, cy, _ in zoom_centers):
+                        zoom_centers.append((x, y, conf))
+                elif DEBUG and idx == 0 and conf >= 0.30:
                     others.append(f"{name} {round(conf * 100)}%")
+
+        # Stage 2: Zoom into top animal/plush candidates not yet confirmed as cats
+        for cx, cy, _ in sorted(zoom_centers, key=lambda c: c[2], reverse=True)[:2]:
+            if any(k["box"][0] <= cx <= k["box"][0] + k["box"][2] and k["box"][1] <= cy <= k["box"][1] + k["box"][3] for k in raw_cats):
+                continue
+            win = 0.55
+            x1 = max(0.0, min(1.0 - win, cx - win / 2))
+            y1 = max(0.0, min(1.0 - win, cy - win / 2))
+            crop = img.crop((int(x1 * w_img), int(y1 * h_img), int((x1 + win) * w_img), int((y1 + win) * h_img)))
+            for sz in scales:
+                zres = YOLO_MODEL.predict(crop, conf=0.25, imgsz=sz, device=DEVICE, verbose=False)[0]
+                for zb in zres.boxes:
+                    if int(zb.cls.item()) == 15:
+                        zconf = float(zb.conf.item())
+                        zx, zy, zw, zh = zb.xywhn[0].tolist()
+                        gx = max(0.0, x1 + (zx - zw / 2) * win)
+                        gy = max(0.0, y1 + (zy - zh / 2) * win)
+                        raw_cats.append({
+                            "conf": round(zconf, 2),
+                            "box": [round(gx, 4), round(gy, 4), round(zw * win, 4), round(zh * win, 4)],
+                        })
+    elapsed = round((time.time() - t0) * 1000, 1)
     cats = []
     for cand in sorted(raw_cats, key=lambda c: c["conf"], reverse=True):
-        if not any(_iou(cand["box"], kept["box"]) > 0.35 for kept in cats):
+        if not any(_overlap(cand["box"], kept["box"]) > 0.15 for kept in cats):
             cats.append(cand)
     if DEBUG:
         cat_str = ", ".join([f"{round(c['conf'] * 100)}%" for c in cats]) if cats else "none"
