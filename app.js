@@ -72,7 +72,9 @@ async function updateDetections(host, card, img) {
     }
     boxesEl.innerHTML = cats.map(c => {
       const [x, y, w, h] = c.box;
-      return `<div class="cat-box" style="left:${ox + x * sw}%;top:${oy + y * sh}%;width:${w * sw}%;height:${h * sh}%"><span>🐱 ${Math.round(c.conf * 100)}%</span></div>`;
+      const top = oy + y * sh;
+      const cls = top < 7 ? 'label-below' : 'label-above';
+      return `<div class="cat-box" style="left:${ox + x * sw}%;top:${top}%;width:${w * sw}%;height:${h * sh}%"><span class="${cls}">🐱 ${Math.round(c.conf * 100)}%</span></div>`;
     }).join('');
     if (zoomDlg.open && zoomDlg.dataset.host === host) {
       syncZoomDetections(host, img);
