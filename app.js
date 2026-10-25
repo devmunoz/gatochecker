@@ -65,12 +65,20 @@ function applyCardSource(card, t = Date.now()) {
       status.className = 'status';
       status.textContent = 'Connecting RTSP…';
     }
-    img.onload = () => { if (status) { status.className = 'status ok'; status.textContent = 'LIVE'; } };
-    img.onerror = () => { if (status) { status.className = 'status err'; status.textContent = 'Offline'; } };
+    img.onload = () => {
+      card.classList.remove('offline');
+      if (status) { status.className = 'status ok'; status.textContent = 'LIVE'; }
+    };
+    img.onerror = () => {
+      card.classList.add('offline');
+      if (status) { status.className = 'status err'; status.textContent = 'Offline'; }
+    };
     img.src = url;
     return;
   }
 
+  img.onload = null;
+  img.onerror = null;
   const snapBase = capsMap[h]?.default_snapshot || `http://${h}/cgi-bin/snapshot.sh?res=high`;
   const url = `${snapBase}${snapBase.includes('?') ? '&' : '?'}t=${t}`;
   if (status) {
@@ -78,8 +86,19 @@ function applyCardSource(card, t = Date.now()) {
     status.textContent = 'Updating…';
   }
   const loader = new Image();
-  loader.onload = () => {
+  const timeoutId = setTimeout(() => {
+    loader.src = '';
     if (liveHosts.has(h)) return;
+    card.classList.add('offline');
+    if (status) {
+      status.className = 'status err';
+      status.textContent = 'Offline';
+    }
+  }, 7000);
+  loader.onload = () => {
+    clearTimeout(timeoutId);
+    if (liveHosts.has(h)) return;
+    card.classList.remove('offline');
     img.src = url;
     if (status) {
       status.className = 'status ok';
@@ -87,7 +106,9 @@ function applyCardSource(card, t = Date.now()) {
     }
   };
   loader.onerror = () => {
+    clearTimeout(timeoutId);
     if (liveHosts.has(h)) return;
+    card.classList.add('offline');
     if (status) {
       status.className = 'status err';
       status.textContent = 'Offline';
@@ -123,7 +144,11 @@ async function refreshAll() {
           </div>
           <span class="status">Loading…</span>
         </div>
-        <img alt="${h}" draggable="false">
+        <div class="cam-viewport">
+          <div class="spinner"></div>
+          <span class="offline-badge">📷 Offline</span>
+          <img alt="${h}" draggable="false">
+        </div>
       </article>
     `).join('');
   }
