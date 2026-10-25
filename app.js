@@ -1,0 +1,261 @@
+const grid = document.getElementById('grid');
+const intervalSel = document.getElementById('interval');
+const adminDlg = document.getElementById('admin');
+const zoomDlg = document.getElementById('zoom');
+const zoomImg = document.getElementById('zoom-img');
+const zoomTitle = document.getElementById('zoom-title');
+const zoomLiveBtn = document.getElementById('zoom-live');
+const cfgRefresh = document.getElementById('cfg-refresh');
+const hostListEl = document.getElementById('host-list');
+const newHostInput = document.getElementById('new-host');
+let timer = null;
+let config = { refresh: 10000, hosts: [] };
+let capsMap = {};
+let draftHosts = [];
+let initialized = false;
+const liveHosts = new Set();
+
+const normalizeHost = (h) => String(h).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+
+async function loadConfig() {
+  const [res, capsRes] = await Promise.all([
+    fetch('./hosts.json', { cache: 'no-store' }),
+    fetch('./capabilities', { cache: 'no-store' }).catch(() => null),
+  ]);
+  const raw = res.ok ? await res.json() : { refresh: 10000, hosts: [] };
+  if (capsRes?.ok) capsMap = await capsRes.json();
+  const list = (Array.isArray(raw) ? raw : (raw.hosts ?? [])).map(normalizeHost).filter(Boolean);
+  config = { refresh: Array.isArray(raw) ? 10000 : (raw.refresh ?? 10000), hosts: list };
+  if (!initialized) {
+    intervalSel.value = String(config.refresh);
+    initialized = true;
+  }
+}
+
+async function saveConfig(refresh, hosts) {
+  const res = await fetch('./hosts.json', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh, hosts })
+  });
+  if (res.ok) config = { refresh, hosts };
+  return res.ok;
+}
+
+function applyCardSource(card, t = Date.now()) {
+  const h = card.dataset.host;
+  const img = card.querySelector('img');
+  const status = card.querySelector('.status');
+  const btn = card.querySelector('.live-btn');
+  const isLive = liveHosts.has(h);
+  btn.classList.toggle('active', isLive);
+  btn.textContent = isLive ? '⏹' : '▶';
+
+  if (isLive) {
+    const url = `/stream?host=${encodeURIComponent(h)}&t=${t}`;
+    status.className = 'status';
+    status.textContent = 'Connecting RTSP…';
+    const target = (zoomDlg.open && zoomDlg.dataset.host === h) ? zoomImg : img;
+    target.onload = () => { status.className = 'status ok'; status.textContent = 'LIVE'; };
+    target.onerror = () => { status.className = 'status err'; status.textContent = 'Offline'; };
+    if (zoomDlg.open && zoomDlg.dataset.host === h) {
+      img.removeAttribute('src');
+      zoomImg.src = url;
+      zoomLiveBtn.classList.add('active');
+      zoomLiveBtn.textContent = '⏹';
+    } else {
+      img.src = url;
+    }
+    return;
+  }
+
+  const snapBase = capsMap[h]?.default_snapshot || `http://${h}/cgi-bin/snapshot.sh?res=high`;
+  const url = `${snapBase}${snapBase.includes('?') ? '&' : '?'}t=${t}`;
+  status.className = 'status';
+  status.textContent = 'Updating…';
+  const loader = new Image();
+  loader.onload = () => {
+    if (liveHosts.has(h)) return;
+    img.src = url;
+    if (zoomDlg.open && zoomDlg.dataset.host === h) {
+      zoomImg.src = url;
+      zoomLiveBtn.classList.remove('active');
+      zoomLiveBtn.textContent = '▶';
+    }
+    status.className = 'status ok';
+    status.textContent = new Date().toLocaleTimeString();
+  };
+  loader.onerror = () => {
+    if (liveHosts.has(h)) return;
+    status.className = 'status err';
+    status.textContent = 'Offline';
+  };
+  loader.src = url;
+}
+
+function renderActionIcons(h) {
+  const c = capsMap[h] || {};
+  return [
+    `<button type="button" class="icon-btn live-btn" data-live="${h}" title="Live RTSP stream in browser">▶</button>`,
+    `<a class="icon-btn" href="http://${h}" target="_blank" rel="noopener" title="Open Yi-Hack web interface">⚙️</a>`,
+    c.high_res_stream ? `<a class="icon-btn" href="${c.high_res_stream}" title="Open High-Res RTSP stream">🎥<sub>H</sub></a>` : '',
+    c.low_res_stream ? `<a class="icon-btn" href="${c.low_res_stream}" title="Open Low-Res RTSP stream">🎥<sub>L</sub></a>` : '',
+    c.high_res_snapshot ? `<a class="icon-btn" href="${c.high_res_snapshot}" target="_blank" rel="noopener" title="Open High-Res Snapshot in new tab">📷<sub>H</sub></a>` : '',
+    c.low_res_snapshot ? `<a class="icon-btn" href="${c.low_res_snapshot}" target="_blank" rel="noopener" title="Open Low-Res Snapshot in new tab">📷<sub>L</sub></a>` : '',
+  ].join('');
+}
+
+async function refreshAll() {
+  await loadConfig();
+  const current = [...grid.querySelectorAll('.cam')].map(c => c.dataset.host);
+  if (JSON.stringify(config.hosts) !== JSON.stringify(current)) {
+    grid.innerHTML = config.hosts.map(h => `
+      <article class="cam" draggable="true" data-host="${h}">
+        <div class="cam-bar">
+          <div class="cam-links">
+            <span title="Drag to reorder">⠿</span>
+            <span class="cam-host">${h}</span>
+            ${renderActionIcons(h)}
+          </div>
+          <span class="status">Loading…</span>
+        </div>
+        <img alt="${h}" draggable="false">
+      </article>
+    `).join('');
+  }
+
+  const t = Date.now();
+  for (const card of grid.querySelectorAll('.cam')) {
+    if (!liveHosts.has(card.dataset.host) || !card.querySelector('img').getAttribute('src')) {
+      applyCardSource(card, t);
+    }
+  }
+}
+
+function toggleLive(h) {
+  if (liveHosts.has(h)) liveHosts.delete(h);
+  else liveHosts.add(h);
+  const card = grid.querySelector(`.cam[data-host="${CSS.escape(h)}"]`);
+  if (card) applyCardSource(card);
+}
+
+grid.onclick = (e) => {
+  const liveBtn = e.target.closest('.live-btn');
+  if (liveBtn) return toggleLive(liveBtn.dataset.live);
+  const img = e.target.closest('.cam img');
+  if (!img) return;
+  const h = img.closest('.cam').dataset.host;
+  const isLive = liveHosts.has(h);
+  zoomDlg.dataset.host = h;
+  zoomTitle.textContent = h;
+  zoomLiveBtn.classList.toggle('active', isLive);
+  zoomLiveBtn.textContent = isLive ? '⏹' : '▶';
+  zoomDlg.showModal();
+  if (isLive) applyCardSource(img.closest('.cam'));
+  else zoomImg.src = img.src;
+};
+zoomDlg.onclose = () => {
+  zoomImg.removeAttribute('src');
+  const card = grid.querySelector(`.cam[data-host="${CSS.escape(zoomDlg.dataset.host || '')}"]`);
+  if (card && liveHosts.has(card.dataset.host)) applyCardSource(card);
+};
+zoomLiveBtn.onclick = () => toggleLive(zoomDlg.dataset.host);
+zoomImg.onclick = () => zoomDlg.close();
+document.getElementById('close-zoom').onclick = () => zoomDlg.close();
+zoomDlg.onclick = (e) => { if (e.target === zoomDlg) zoomDlg.close(); };
+
+function enableDragSort(container, itemSel, onSorted) {
+  let dragged = null;
+  container.addEventListener('dragstart', (e) => {
+    dragged = e.target.closest(itemSel);
+    if (dragged) dragged.classList.add('dragging');
+  });
+  container.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const target = e.target.closest(itemSel);
+    if (!dragged || !target || target === dragged) return;
+    const items = [...container.querySelectorAll(itemSel)];
+    if (items.indexOf(dragged) < items.indexOf(target)) target.after(dragged);
+    else target.before(dragged);
+  });
+  container.addEventListener('dragend', () => {
+    if (!dragged) return;
+    dragged.classList.remove('dragging');
+    dragged = null;
+    onSorted([...container.querySelectorAll(itemSel)]);
+  });
+}
+
+enableDragSort(grid, '.cam', (items) => {
+  const next = items.map(c => c.dataset.host);
+  if (JSON.stringify(next) !== JSON.stringify(config.hosts)) {
+    saveConfig(config.refresh, next);
+  }
+});
+
+enableDragSort(hostListEl, 'li', (items) => {
+  draftHosts = items.map(li => li.dataset.host);
+  renderDraftHosts();
+});
+
+function renderDraftHosts() {
+  hostListEl.innerHTML = draftHosts.map((h, i) => `
+    <li draggable="true" data-host="${h}">
+      <span>⠿ ${h}</span>
+      <button type="button" data-rm="${i}" title="Remove">✕</button>
+    </li>
+  `).join('');
+}
+
+hostListEl.onclick = (e) => {
+  const idx = e.target.dataset.rm;
+  if (idx !== undefined) {
+    draftHosts.splice(Number(idx), 1);
+    renderDraftHosts();
+  }
+};
+
+function addDraftHost() {
+  const val = normalizeHost(newHostInput.value);
+  if (val && !draftHosts.includes(val)) {
+    draftHosts.push(val);
+    newHostInput.value = '';
+    renderDraftHosts();
+  }
+}
+
+document.getElementById('add-host').onclick = addDraftHost;
+newHostInput.onkeydown = (e) => { if (e.key === 'Enter') addDraftHost(); };
+
+document.getElementById('open-admin').onclick = async () => {
+  await loadConfig();
+  cfgRefresh.value = String(config.refresh);
+  draftHosts = [...config.hosts];
+  renderDraftHosts();
+  adminDlg.showModal();
+};
+
+document.getElementById('cancel-admin').onclick = () => adminDlg.close();
+
+document.getElementById('save-admin').onclick = async () => {
+  addDraftHost();
+  const refresh = Number(cfgRefresh.value);
+  if (!(await saveConfig(refresh, draftHosts))) {
+    return alert('Failed to save hosts.json (run python3 server.py)');
+  }
+  intervalSel.value = String(refresh);
+  resetTimer();
+  adminDlg.close();
+  await refreshAll();
+};
+
+function resetTimer() {
+  clearInterval(timer);
+  const ms = Number(intervalSel.value);
+  if (ms > 0) timer = setInterval(refreshAll, ms);
+}
+
+document.getElementById('refresh').onclick = refreshAll;
+intervalSel.onchange = resetTimer;
+await refreshAll();
+resetTimer();
