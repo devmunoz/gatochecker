@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
-MODEL_FILE = Path(__file__).with_name("yolov8n.pt")
+MODEL_FILE = Path(__file__).with_name("yolo11n.pt")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 CAPS_CACHE = {}
 DETECTIONS = {}
@@ -39,7 +39,7 @@ def detect_cats(raw_bytes):
         if YOLO_MODEL is None:
             YOLO_MODEL = YOLO(str(MODEL_FILE))
         img = Image.open(io.BytesIO(raw_bytes))
-        res = YOLO_MODEL.predict(img, classes=[15], conf=0.25, verbose=False)[0]
+        res = YOLO_MODEL.predict(img, classes=[15], conf=0.20, imgsz=960, verbose=False)[0]
     cats = []
     for b in res.boxes:
         x, y, w, h = b.xywhn[0].tolist()

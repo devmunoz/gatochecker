@@ -1,4 +1,4 @@
 hosts.json
 .venv/
-yolov8n.pt
+*.pt
 __pycache__/
