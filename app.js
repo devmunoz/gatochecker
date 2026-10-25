@@ -43,6 +43,40 @@ async function saveConfig(refresh, hosts) {
   return res.ok;
 }
 
+async function updateDetections(host, card, img) {
+  try {
+    const res = await fetch('./detections', { cache: 'no-store' });
+    if (!res.ok) return;
+    const all = await res.json();
+    const det = all[host];
+    const cats = (!liveHosts.has(host) && det?.cats) ? det.cats : [];
+    card.classList.toggle('has-cat', cats.length > 0);
+    const badge = card.querySelector('.cat-badge');
+    if (badge && cats.length) {
+      const maxConf = Math.round(Math.max(...cats.map(c => c.conf)) * 100);
+      badge.textContent = `🐱 ${cats.length > 1 ? `${cats.length} · ` : ''}${maxConf}%`;
+    }
+    const boxesEl = card.querySelector('.cat-boxes');
+    if (!boxesEl) return;
+    let ox = 0, oy = 0, sw = 100, sh = 100;
+    if (img?.naturalWidth && img?.naturalHeight) {
+      const imgRatio = img.naturalWidth / img.naturalHeight;
+      const viewRatio = 16 / 9;
+      if (imgRatio < viewRatio) {
+        sw = (imgRatio / viewRatio) * 100;
+        ox = (100 - sw) / 2;
+      } else if (imgRatio > viewRatio) {
+        sh = (viewRatio / imgRatio) * 100;
+        oy = (100 - sh) / 2;
+      }
+    }
+    boxesEl.innerHTML = cats.map(c => {
+      const [x, y, w, h] = c.box;
+      return `<div class="cat-box" style="left:${ox + x * sw}%;top:${oy + y * sh}%;width:${w * sw}%;height:${h * sh}%"><span>🐱 ${Math.round(c.conf * 100)}%</span></div>`;
+    }).join('');
+  } catch {}
+}
+
 function applyCardSource(card, t = Date.now()) {
   const h = card.dataset.host;
   const img = card.querySelector('img') || (zoomDlg.open && zoomDlg.dataset.host === h ? zoomedImg : null);
@@ -62,6 +96,9 @@ function applyCardSource(card, t = Date.now()) {
     document.getElementById('zoom-refresh').disabled = isLive;
   }
   if (isLive) {
+    card.classList.remove('has-cat');
+    const boxesEl = card.querySelector('.cat-boxes');
+    if (boxesEl) boxesEl.innerHTML = '';
     const url = `/stream?host=${encodeURIComponent(h)}&t=${t}`;
     if (status) {
       status.className = 'status';
@@ -81,8 +118,7 @@ function applyCardSource(card, t = Date.now()) {
 
   img.onload = null;
   img.onerror = null;
-  const snapBase = capsMap[h]?.default_snapshot || `http://${h}/cgi-bin/snapshot.sh?res=high`;
-  const url = `${snapBase}${snapBase.includes('?') ? '&' : '?'}t=${t}`;
+  const url = `/snapshot?host=${encodeURIComponent(h)}&t=${t}`;
   if (status) {
     status.className = 'status';
     status.textContent = 'Updating…';
@@ -92,11 +128,12 @@ function applyCardSource(card, t = Date.now()) {
     loader.src = '';
     if (liveHosts.has(h)) return;
     card.classList.add('offline');
+    card.classList.remove('has-cat');
     if (status) {
       status.className = 'status err';
       status.textContent = 'Offline';
     }
-  }, 7000);
+  }, 12000);
   loader.onload = () => {
     clearTimeout(timeoutId);
     if (liveHosts.has(h)) return;
@@ -106,11 +143,13 @@ function applyCardSource(card, t = Date.now()) {
       status.className = 'status ok';
       status.textContent = new Date().toLocaleTimeString();
     }
+    updateDetections(h, card, loader);
   };
   loader.onerror = () => {
     clearTimeout(timeoutId);
     if (liveHosts.has(h)) return;
     card.classList.add('offline');
+    card.classList.remove('has-cat');
     if (status) {
       status.className = 'status err';
       status.textContent = 'Offline';
@@ -143,6 +182,7 @@ async function refreshAll() {
             <span class="cam-host">${h}</span>
             <button type="button" class="icon-btn live-btn" data-live="${h}" title="Live RTSP stream in browser">▶</button>
             <button type="button" class="icon-btn snap-refresh-btn" data-refresh="${h}" title="Refresh snapshot">🔄</button>
+            <span class="cat-badge" title="Cat detected"></span>
           </div>
           <span class="status">Loading…</span>
         </div>
@@ -150,6 +190,7 @@ async function refreshAll() {
           <div class="spinner"></div>
           <span class="offline-badge">📷 Offline</span>
           <img alt="${h}" draggable="false">
+          <div class="cat-boxes"></div>
         </div>
         <div class="cam-footer">
           ${renderBottomLinks(h)}

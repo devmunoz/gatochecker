@@ -9,14 +9,15 @@ A lightweight, zero-dependency camera dashboard and control panel for cameras ru
 ## Features
 
 - **Unified Snapshot Grid**: Fetches high-resolution snapshots across all configured cameras with configurable auto-refresh.
-- **Inline RTSP Live Streaming**: Toggle `▶ RTSP` on any camera card (or inside the zoom modal) to stream directly in the browser via `ffmpeg`.
+- **YOLOv8n Cat Detection**: Server-side cat detection (`COCO class 15`) on every snapshot with confidence badges (`🐱 88%`), card border highlight, and bounding box overlays.
+- **Inline RTSP Live Streaming**: Toggle `▶` on any camera card (or inside the zoom modal) to stream directly in the browser via `ffmpeg`.
 - **Drag-and-Drop Reordering**: Reorder cameras directly in the main grid or inside the settings modal.
 - **In-App Settings (`⚙️`)**: Add, remove, and reorder cameras and configure the default refresh interval directly from the web UI.
 
 ## Requirements
 
-- Python 3
-- `ffmpeg` (optional, required only for `▶ RTSP` live streaming)
+- Python 3 (`uv venv --python 3.12 .venv && uv pip install ultralytics` for YOLOv8n cat detection; `server.py` auto-switches to `.venv` if present)
+- `ffmpeg` (optional, required only for `▶` live streaming)
 - One or more cameras running [yi-hack-Allwinner-v2](https://github.com/roleoroleo/yi-hack-Allwinner-v2)
 
 ## Usage

@@ -1,18 +1,53 @@
 #!/usr/bin/env python3
 from concurrent.futures import ThreadPoolExecutor
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import io
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import threading
 from urllib.parse import parse_qs, urlparse
 from urllib.request import urlopen
 
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
+MODEL_FILE = Path(__file__).with_name("yolov8n.pt")
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 CAPS_CACHE = {}
+DETECTIONS = {}
+YOLO_LOCK = threading.Lock()
+YOLO_MODEL = None
 
+try:
+    from PIL import Image
+    from ultralytics import YOLO
+except ImportError:
+    venv_py = Path(__file__).with_name(".venv") / "bin" / "python"
+    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+        import os
+        os.execv(str(venv_py), [str(venv_py), *sys.argv])
+    YOLO = None
+
+
+def detect_cats(raw_bytes):
+    global YOLO_MODEL
+    if YOLO is None:
+        return []
+    # ponytail: global lock around YOLOv8n inference; move to process pool if >10 cameras refresh simultaneously
+    with YOLO_LOCK:
+        if YOLO_MODEL is None:
+            YOLO_MODEL = YOLO(str(MODEL_FILE))
+        img = Image.open(io.BytesIO(raw_bytes))
+        res = YOLO_MODEL.predict(img, classes=[15], conf=0.25, verbose=False)[0]
+    cats = []
+    for b in res.boxes:
+        x, y, w, h = b.xywhn[0].tolist()
+        cats.append({
+            "conf": round(float(b.conf.item()), 2),
+            "box": [round(x - w / 2, 4), round(y - h / 2, 4), round(w, 4), round(h, 4)],
+        })
+    return cats
 
 def get_hosts():
     if not HOSTS_FILE.exists():
@@ -71,6 +106,31 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             return self.wfile.write(json.dumps(caps).encode())
+        if parsed.path == "/detections":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(json.dumps(DETECTIONS).encode())
+        if parsed.path == "/snapshot":
+            params = parse_qs(parsed.query)
+            host = params.get("host", [""])[0]
+            if host not in get_hosts():
+                return self.send_error(403, "Unknown host")
+            snap_url = get_host_caps(host)["default_snapshot"]
+            try:
+                with urlopen(snap_url, timeout=5) as resp:
+                    raw = resp.read()
+                    ctype = resp.headers.get("Content-Type", "image/jpeg")
+            except Exception:
+                return self.send_error(502, "Camera unreachable")
+            cats = detect_cats(raw)
+            DETECTIONS[host] = {"cat": bool(cats), "cats": cats}
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(raw)
         if parsed.path != "/stream":
             return super().do_GET()
         params = parse_qs(parsed.query)

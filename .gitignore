@@ -1,1 +1,3 @@
 hosts.json
+.venv/
+yolov8n.pt
