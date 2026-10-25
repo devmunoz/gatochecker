@@ -15,7 +15,7 @@ from urllib.request import Request, urlopen
 
 DEBUG = "--debug" in sys.argv or "-v" in sys.argv or os.environ.get("DEBUG") in ("1", "true", "True")
 HOSTS_FILE = Path(__file__).with_name("hosts.json")
-MODEL_FILE = Path(__file__).with_name("yolo11n.pt")
+MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", "yolo11s.pt"))
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 CAPS_CACHE = {}
 DETECTIONS = {}
@@ -43,27 +43,32 @@ def detect_cats(raw_bytes, host=""):
         if YOLO_MODEL is None:
             YOLO_MODEL = YOLO(str(MODEL_FILE))
         img = Image.open(io.BytesIO(raw_bytes))
-        conf_thresh = 0.10 if DEBUG else 0.20
-        res = YOLO_MODEL.predict(img, conf=conf_thresh, imgsz=960, verbose=False)[0]
+        conf_thresh = 0.05 if DEBUG else 0.18
+        res = YOLO_MODEL.predict(img, conf=conf_thresh, imgsz=1280, augment=True, verbose=False)[0]
     elapsed = round((time.time() - t0) * 1000, 1)
     cats = []
+    near_cats = []
     others = []
     for b in res.boxes:
         cls_id = int(b.cls.item())
         conf = float(b.conf.item())
         name = YOLO_MODEL.names[cls_id]
-        if cls_id == 15 and conf >= 0.20:
+        if cls_id == 15 and conf >= 0.18:
             x, y, w, h = b.xywhn[0].tolist()
             cats.append({
                 "conf": round(conf, 2),
                 "box": [round(x - w / 2, 4), round(y - h / 2, 4), round(w, 4), round(h, 4)],
             })
-        elif DEBUG and conf >= 0.15:
-            others.append(f"{name} {round(conf * 100)}%")
+        elif DEBUG:
+            if cls_id in (14, 15, 16, 21, 77) and conf >= 0.05:
+                near_cats.append(f"{name} {round(conf * 100)}%")
+            elif conf >= 0.25:
+                others.append(f"{name} {round(conf * 100)}%")
     if DEBUG:
         cat_str = ", ".join([f"{round(c['conf'] * 100)}%" for c in cats]) if cats else "none"
-        other_str = f" | other: {', '.join(others)}" if others else ""
-        sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms{other_str}\n")
+        near_str = f" | candidates: {', '.join(near_cats)}" if near_cats else ""
+        other_str = f" | scene: {', '.join(others)}" if others else ""
+        sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms{near_str}{other_str}\n")
     return cats
 
 def get_hosts():
