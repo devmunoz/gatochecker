@@ -7,10 +7,12 @@ let zoomedPlaceholder = null;
 const zoomTitle = document.getElementById('zoom-title');
 const zoomLiveBtn = document.getElementById('zoom-live');
 const cfgRefresh = document.getElementById('cfg-refresh');
+const cfgConf = document.getElementById('cfg-conf');
 const hostListEl = document.getElementById('host-list');
 const newHostInput = document.getElementById('new-host');
+const addHostMsg = document.getElementById('add-host-msg');
 let timer = null;
-let config = { refresh: 10000, hosts: [] };
+let config = { refresh: 10000, min_conf: 18, hosts: [] };
 let capsMap = {};
 let draftHosts = [];
 let initialized = false;
@@ -23,23 +25,23 @@ async function loadConfig() {
     fetch('./hosts.json', { cache: 'no-store' }),
     fetch('./capabilities', { cache: 'no-store' }).catch(() => null),
   ]);
-  const raw = res.ok ? await res.json() : { refresh: 10000, hosts: [] };
+  const raw = res.ok ? await res.json() : { refresh: 10000, min_conf: 18, hosts: [] };
   if (capsRes?.ok) capsMap = await capsRes.json();
   const list = (Array.isArray(raw) ? raw : (raw.hosts ?? [])).map(normalizeHost).filter(Boolean);
-  config = { refresh: Array.isArray(raw) ? 10000 : (raw.refresh ?? 10000), hosts: list };
+  config = { refresh: raw.refresh ?? 10000, min_conf: raw.min_conf ?? 18, hosts: list };
   if (!initialized) {
     intervalSel.value = String(config.refresh);
     initialized = true;
   }
 }
 
-async function saveConfig(refresh, hosts) {
+async function saveConfig(refresh, min_conf, hosts) {
   const res = await fetch('./hosts.json', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh, hosts })
+    body: JSON.stringify({ refresh, min_conf, hosts })
   });
-  if (res.ok) config = { refresh, hosts };
+  if (res.ok) config = { refresh, min_conf, hosts };
   return res.ok;
 }
 
@@ -305,7 +307,7 @@ function enableDragSort(container, itemSel, onSorted) {
 enableDragSort(grid, '.cam', (items) => {
   const next = items.map(c => c.dataset.host);
   if (JSON.stringify(next) !== JSON.stringify(config.hosts)) {
-    saveConfig(config.refresh, next);
+    saveConfig(config.refresh, config.min_conf, next);
   }
 });
 
@@ -331,21 +333,59 @@ hostListEl.onclick = (e) => {
   }
 };
 
-function addDraftHost() {
+async function addDraftHost(force = false) {
   const val = normalizeHost(newHostInput.value);
-  if (val && !draftHosts.includes(val)) {
-    draftHosts.push(val);
-    newHostInput.value = '';
-    renderDraftHosts();
+  if (!val) return;
+  if (draftHosts.includes(val)) {
+    if (addHostMsg) { addHostMsg.className = 'field-msg err'; addHostMsg.textContent = `⚠️ Camera ${val} already added`; }
+    return;
   }
+  if (!force) {
+    const addBtn = document.getElementById('add-host');
+    addBtn.disabled = true;
+    addBtn.textContent = 'Checking…';
+    if (addHostMsg) { addHostMsg.className = 'field-msg info'; addHostMsg.textContent = `Connecting to ${val}…`; }
+    try {
+      const res = await fetch(`./validate?host=${encodeURIComponent(val)}`);
+      const data = await res.json();
+      if (!data.ok) {
+        if (addHostMsg) {
+          addHostMsg.className = 'field-msg err';
+          addHostMsg.innerHTML = `⚠️ ${data.error || 'Failed to connect'}. <button type="button" class="link-btn" id="force-add-host">Add anyway</button>`;
+          document.getElementById('force-add-host')?.addEventListener('click', () => addDraftHost(true));
+        }
+        return;
+      }
+      if (addHostMsg) {
+        addHostMsg.className = 'field-msg ok';
+        const modelStr = data.model ? ` (${data.model})` : '';
+        addHostMsg.textContent = `✓ ${data.hostname || val}${modelStr} - ${data.name || 'yi-hack'}`;
+      }
+    } catch (e) {
+      if (addHostMsg) {
+        addHostMsg.className = 'field-msg err';
+        addHostMsg.innerHTML = `⚠️ Could not reach camera. <button type="button" class="link-btn" id="force-add-host">Add anyway</button>`;
+        document.getElementById('force-add-host')?.addEventListener('click', () => addDraftHost(true));
+      }
+      return;
+    } finally {
+      addBtn.disabled = false;
+      addBtn.textContent = '+ Add';
+    }
+  }
+  draftHosts.push(val);
+  newHostInput.value = '';
+  renderDraftHosts();
 }
 
-document.getElementById('add-host').onclick = addDraftHost;
-newHostInput.onkeydown = (e) => { if (e.key === 'Enter') addDraftHost(); };
+document.getElementById('add-host').onclick = () => addDraftHost(false);
+newHostInput.onkeydown = (e) => { if (e.key === 'Enter') addDraftHost(false); };
 
 document.getElementById('open-admin').onclick = async () => {
   await loadConfig();
   cfgRefresh.value = String(config.refresh);
+  if (cfgConf) cfgConf.value = String(config.min_conf);
+  if (addHostMsg) { addHostMsg.className = 'field-msg'; addHostMsg.textContent = ''; }
   draftHosts = [...config.hosts];
   renderDraftHosts();
   adminDlg.showModal();
@@ -354,9 +394,9 @@ document.getElementById('open-admin').onclick = async () => {
 document.getElementById('cancel-admin').onclick = () => adminDlg.close();
 
 document.getElementById('save-admin').onclick = async () => {
-  addDraftHost();
   const refresh = Number(cfgRefresh.value);
-  if (!(await saveConfig(refresh, draftHosts))) {
+  const min_conf = Number(cfgConf?.value || config.min_conf);
+  if (!(await saveConfig(refresh, min_conf, draftHosts))) {
     return alert('Failed to save hosts.json (run python3 server.py)');
   }
   intervalSel.value = String(refresh);

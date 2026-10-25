@@ -38,12 +38,24 @@
     </select>
   </div>
   <div class="field">
+    <label for="cfg-conf">Cat detection threshold</label>
+    <select id="cfg-conf">
+      <option value="12">12% (Maximum sensitivity)</option>
+      <option value="15">15% (Very sensitive, tucks & shadows)</option>
+      <option value="18" selected>18% (Recommended)</option>
+      <option value="25">25% (Balanced)</option>
+      <option value="35">35% (High confidence only)</option>
+      <option value="50">50% (Strict)</option>
+    </select>
+  </div>
+  <div class="field">
     <label>Cameras (`hosts.json`)</label>
     <ul id="host-list"></ul>
     <div class="add-row">
       <input id="new-host" placeholder="e.g. 192.168.1.50 or camera.local">
       <button type="button" id="add-host">+ Add</button>
     </div>
+    <div id="add-host-msg" class="field-msg"></div>
   </div>
   <div class="dialog-actions">
     <button type="button" id="cancel-admin">Cancel</button>

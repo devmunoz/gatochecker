@@ -54,7 +54,8 @@ def detect_cats(raw_bytes, host=""):
             YOLO_MODEL = RTDETR(str(MODEL_FILE)) if is_rtdetr else YOLO(str(MODEL_FILE))
         img = Image.open(io.BytesIO(raw_bytes))
         w_img, h_img = img.size
-        scales = (640, 960) if is_rtdetr else (1280,)
+        min_conf = get_config().get("min_conf", 18) / 100.0
+        conf_thresh = 0.07 if DEBUG else min_conf
         results = [
             YOLO_MODEL.predict(img, conf=0.07, imgsz=sz, device=DEVICE, verbose=False)[0]
             for sz in scales
@@ -70,7 +71,7 @@ def detect_cats(raw_bytes, host=""):
                 name = YOLO_MODEL.names[cls_id]
                 x, y, w, h = b.xywhn[0].tolist()
                 box = [round(max(0.0, x - w / 2), 4), round(max(0.0, y - h / 2), 4), round(w, 4), round(h, 4)]
-                if cls_id == 15 and conf >= 0.16:
+                if cls_id == 15 and conf >= min_conf:
                     raw_cats.append({"conf": round(conf, 2), "box": box})
                 elif cls_id in (14, 15, 16, 21, 77) and conf >= 0.08:
                     if idx == 0:
@@ -89,7 +90,7 @@ def detect_cats(raw_bytes, host=""):
             y1 = max(0.0, min(1.0 - win, cy - win / 2))
             crop = img.crop((int(x1 * w_img), int(y1 * h_img), int((x1 + win) * w_img), int((y1 + win) * h_img)))
             for sz in scales:
-                zres = YOLO_MODEL.predict(crop, conf=0.25, imgsz=sz, device=DEVICE, verbose=False)[0]
+                zres = YOLO_MODEL.predict(crop, conf=min_conf, imgsz=sz, device=DEVICE, verbose=False)[0]
                 for zb in zres.boxes:
                     if int(zb.cls.item()) == 15:
                         zconf = float(zb.conf.item())
@@ -112,12 +113,23 @@ def detect_cats(raw_bytes, host=""):
         sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms ({DEVICE}){near_str}{other_str}\n")
     return cats
 
-def get_hosts():
+def get_config():
     if not HOSTS_FILE.exists():
-        return []
-    raw = json.loads(HOSTS_FILE.read_text())
-    return raw if isinstance(raw, list) else raw.get("hosts", [])
+        return {"refresh": 10000, "min_conf": 18, "hosts": []}
+    try:
+        raw = json.loads(HOSTS_FILE.read_text())
+        if isinstance(raw, list):
+            return {"refresh": 10000, "min_conf": 18, "hosts": raw}
+        return {
+            "refresh": int(raw.get("refresh", 10000)),
+            "min_conf": int(raw.get("min_conf", 18)),
+            "hosts": raw.get("hosts", []),
+        }
+    except Exception:
+        return {"refresh": 10000, "min_conf": 18, "hosts": []}
 
+def get_hosts():
+    return get_config()["hosts"]
 
 def get_host_caps(host):
     if host in CAPS_CACHE:
@@ -160,7 +172,42 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            return self.wfile.write(b'{"refresh":10000,"hosts":[]}')
+            return self.wfile.write(b'{"refresh":10000,"min_conf":18,"hosts":[]}')
+        if parsed.path == "/validate":
+            params = parse_qs(parsed.query)
+            host = params.get("host", [""])[0].strip()
+            if not host:
+                self.send_response(400)
+                self.end_headers()
+                return self.wfile.write(b'{"ok":false,"error":"Host is required"}')
+            info = {}
+            try:
+                req = Request(f"http://{host}/cgi-bin/status.json", headers={"User-Agent": "GatoChecker/1.0"})
+                with urlopen(req, timeout=3.5) as resp:
+                    data = json.loads(resp.read().decode())
+                    info = {
+                        "ok": True,
+                        "name": data.get("name", "yi-hack"),
+                        "hostname": data.get("hostname", host),
+                        "model": data.get("model_suffix", ""),
+                        "fw": data.get("fw_version", ""),
+                    }
+            except Exception:
+                try:
+                    req = Request(f"http://{host}/cgi-bin/links.sh", headers={"User-Agent": "GatoChecker/1.0"})
+                    with urlopen(req, timeout=3.5) as resp:
+                        data = json.loads(resp.read().decode())
+                        if "high_res_snapshot" in data or "low_res_stream" in data:
+                            info = {"ok": True, "name": "yi-hack", "hostname": host}
+                        else:
+                            info = {"ok": False, "error": "Not a Yi-Hack camera (unexpected response)"}
+                except Exception as e:
+                    info = {"ok": False, "error": f"Unreachable ({e})"}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return self.wfile.write(json.dumps(info).encode())
         if parsed.path == "/capabilities":
             hosts = get_hosts()
             with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
@@ -243,10 +290,11 @@ class Handler(SimpleHTTPRequestHandler):
             assert isinstance(data, dict) and isinstance(data.get("hosts"), list)
             hosts = [str(h).strip() for h in data["hosts"] if str(h).strip()]
             refresh = int(data.get("refresh", 10000))
+            min_conf = max(5, min(95, int(data.get("min_conf", 18))))
         except Exception:
             return self.send_error(400, "Invalid config")
 
-        HOSTS_FILE.write_text(json.dumps({"refresh": refresh, "hosts": hosts}, indent=2) + "\n")
+        HOSTS_FILE.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
