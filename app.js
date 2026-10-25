@@ -74,7 +74,28 @@ async function updateDetections(host, card, img) {
       const [x, y, w, h] = c.box;
       return `<div class="cat-box" style="left:${ox + x * sw}%;top:${oy + y * sh}%;width:${w * sw}%;height:${h * sh}%"><span>🐱 ${Math.round(c.conf * 100)}%</span></div>`;
     }).join('');
+    if (zoomDlg.open && zoomDlg.dataset.host === host) {
+      syncZoomDetections(host, img);
+    }
   } catch {}
+}
+
+function syncZoomDetections(h, img) {
+  const zoomBoxes = document.getElementById('zoom-cat-boxes');
+  const zoomBadge = document.getElementById('zoom-cat-badge');
+  const card = grid.querySelector(`.cam[data-host="${CSS.escape(h)}"]`);
+  const isLive = liveHosts.has(h);
+  if (!card || isLive) {
+    zoomDlg.classList.remove('has-cat');
+    if (zoomBoxes) zoomBoxes.innerHTML = '';
+    return;
+  }
+  zoomDlg.classList.toggle('has-cat', card.classList.contains('has-cat'));
+  if (zoomBadge) zoomBadge.textContent = card.querySelector('.cat-badge')?.textContent || '';
+  if (zoomBoxes) {
+    const cardBoxes = card.querySelector('.cat-boxes');
+    zoomBoxes.innerHTML = cardBoxes ? cardBoxes.innerHTML : '';
+  }
 }
 
 function applyCardSource(card, t = Date.now()) {
@@ -240,7 +261,8 @@ grid.onclick = (e) => {
   zoomedPlaceholder = document.createElement('div');
   zoomedPlaceholder.className = 'cam-placeholder';
   img.replaceWith(zoomedPlaceholder);
-  zoomDlg.appendChild(img);
+  zoomDlg.querySelector('.zoom-viewport').prepend(img);
+  syncZoomDetections(h, img);
 
   zoomDlg.showModal();
 };
