@@ -352,6 +352,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "snapshot": disc_snap,
                     "stream": disc_stream,
                 }
+            else:
+                snap_url = resolve_cam_url(host, snap_param, "http")
                 try:
                     req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
                     with urlopen(req, timeout=5) as resp:
