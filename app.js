@@ -24,7 +24,7 @@ const normalizeHost = (h) => String(h).trim().replace(/^https?:\/\//i, '').repla
 
 async function loadConfig() {
   const [res, capsRes] = await Promise.all([
-    fetch('./hosts.json', { cache: 'no-store' }),
+    fetch('./config.json', { cache: 'no-store' }).catch(() => fetch('./hosts.json', { cache: 'no-store' })),
     fetch('./capabilities', { cache: 'no-store' }).catch(() => null),
   ]);
   const raw = res.ok ? await res.json() : { refresh: 10000, min_conf: 18, hosts: [] };
@@ -39,7 +39,7 @@ async function loadConfig() {
 }
 
 async function saveConfig(refresh, min_conf, hosts) {
-  const res = await fetch('./hosts.json', {
+  const res = await fetch('./config.json', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ refresh, min_conf, hosts })
@@ -437,7 +437,7 @@ document.getElementById('save-admin').onclick = async () => {
   const refresh = Number(cfgRefresh.value);
   const min_conf = Number(cfgConf?.value || config.min_conf);
   if (!(await saveConfig(refresh, min_conf, draftHosts))) {
-    return alert('Failed to save hosts.json (run python3 server.py)');
+    return alert('Failed to save config.json (run python3 server.py)');
   }
   intervalSel.value = String(refresh);
   resetTimer();

@@ -14,7 +14,8 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 DEBUG = "--debug" in sys.argv or "-v" in sys.argv or os.environ.get("DEBUG") in ("1", "true", "True")
-HOSTS_FILE = Path(__file__).with_name("hosts.json")
+CONFIG_FILE = Path(os.environ.get("GATO_CONFIG", Path(__file__).with_name("config.json")))
+LEGACY_HOSTS_FILE = Path(__file__).with_name("hosts.json")
 MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", "rtdetr-l.pt"))
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 CAPS_CACHE = {}
@@ -115,10 +116,13 @@ def detect_cats(raw_bytes, host=""):
     return cats
 
 def get_config():
-    if not HOSTS_FILE.exists():
+    target = CONFIG_FILE
+    if not target.exists() and LEGACY_HOSTS_FILE.exists():
+        target = LEGACY_HOSTS_FILE
+    if not target.exists():
         return {"refresh": 10000, "min_conf": 18, "hosts": []}
     try:
-        raw = json.loads(HOSTS_FILE.read_text())
+        raw = json.loads(target.read_text())
         if isinstance(raw, list):
             return {"refresh": 10000, "min_conf": 18, "hosts": raw}
         return {
@@ -169,11 +173,12 @@ def get_host_caps(host):
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/hosts.json" and not HOSTS_FILE.exists():
+        if parsed.path in ("/config.json", "/hosts.json"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            return self.wfile.write(b'{"refresh":10000,"min_conf":18,"hosts":[]}')
+            return self.wfile.write(json.dumps(get_config()).encode())
         if parsed.path == "/validate":
             params = parse_qs(parsed.query)
             host = params.get("host", [""])[0].strip()
@@ -283,7 +288,7 @@ class Handler(SimpleHTTPRequestHandler):
             proc.wait()
 
     def do_PUT(self):
-        if self.path != "/hosts.json":
+        if self.path not in ("/config.json", "/hosts.json"):
             return self.send_error(404)
         try:
             raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -295,7 +300,7 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             return self.send_error(400, "Invalid config")
 
-        HOSTS_FILE.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
+        CONFIG_FILE.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
