@@ -10,12 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PyTorch CPU-first (keeps image lightweight on x86_64 / Intel N100), then requirements
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cpu
+
+# Install PyTorch (default: CPU-only for lightweight images on Intel N100; set TORCH_INDEX=cuda for NVIDIA GPUs)
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    (pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu || pip install --no-cache-dir torch torchvision) && \
+    if [ "$TORCH_INDEX" = "cuda" ]; then \
+        pip install --no-cache-dir torch torchvision; \
+    else \
+        (pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX" || pip install --no-cache-dir torch torchvision); \
+    fi && \
     pip install --no-cache-dir -r requirements.txt
-
 # Pre-download default vision transformer weights so container works offline
 RUN python3 -c "from ultralytics import RTDETR; RTDETR('rtdetr-l.pt')"
 

@@ -1,6 +1,9 @@
 services:
   gatochecker:
-    build: .
+    build:
+      context: .
+      # args:
+      #   TORCH_INDEX: cuda  # Uncomment to build with NVIDIA CUDA support
     image: gatochecker:latest
     container_name: gatochecker
     restart: unless-stopped
@@ -11,4 +14,12 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       # - DEBUG=1  # Optional: enable detailed ML detection logs
+      # - DEVICE=cuda  # Optional: force cuda, mps, or cpu
       # - YOLO_MODEL=rtdetr-l.pt  # Optional: rtdetr-l.pt, yolo11s.pt, etc.
+    # deploy:  # Uncomment for NVIDIA GPU passthrough (requires nvidia-container-toolkit)
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]

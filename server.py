@@ -26,8 +26,14 @@ YOLO_MODEL = None
 try:
     from PIL import Image
     import torch
-    from ultralytics import RTDETR, YOLO
-    DEVICE = "mps" if torch.backends.mps.is_available() else "cpu"
+    if os.environ.get("DEVICE"):
+        DEVICE = os.environ["DEVICE"]
+    elif torch.cuda.is_available():
+        DEVICE = "cuda"
+    elif torch.backends.mps.is_available():
+        DEVICE = "mps"
+    else:
+        DEVICE = "cpu"
 except ImportError:
     venv_py = Path(__file__).with_name(".venv") / "bin" / "python"
     if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
