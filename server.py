@@ -304,18 +304,42 @@ class Handler(SimpleHTTPRequestHandler):
             if not host:
                 return self._send_json({"ok": False, "error": "Host is required"}, status=400)
             info = {}
+            status_data = None
+            links_data = None
             try:
                 req = Request(f"http://{host}/cgi-bin/status.json", headers={"User-Agent": "GatoChecker/1.0"})
-                with urlopen(req, timeout=3.5) as resp:
-                    data = json.loads(resp.read().decode())
-                    info = {
-                        "ok": True,
-                        "name": data.get("name", "yi-hack"),
-                        "hostname": data.get("hostname", host),
-                        "model": data.get("model_suffix", ""),
-                        "fw": data.get("fw_version", ""),
-                    }
+                with urlopen(req, timeout=3.0) as resp:
+                    status_data = json.loads(resp.read().decode())
             except Exception:
+                pass
+            try:
+                req = Request(f"http://{host}/cgi-bin/links.sh", headers={"User-Agent": "GatoChecker/1.0"})
+                with urlopen(req, timeout=3.0) as resp:
+                    links_data = json.loads(resp.read().decode())
+            except Exception:
+                pass
+            if status_data or (isinstance(links_data, dict) and any(k in links_data for k in ("high_res_snapshot", "low_res_snapshot", "high_res_stream", "low_res_stream"))):
+                disc_snap = DEFAULT_SNAP_PATH
+                disc_stream = DEFAULT_STREAM_PATH
+                if isinstance(links_data, dict):
+                    raw_snap = links_data.get("high_res_snapshot") or links_data.get("low_res_snapshot")
+                    if raw_snap:
+                        ps = urlparse(raw_snap)
+                        disc_snap = f"{ps.path}?{ps.query}" if ps.query else (ps.path or DEFAULT_SNAP_PATH)
+                    raw_stream = links_data.get("low_res_stream") or links_data.get("high_res_stream")
+                    if raw_stream:
+                        disc_stream = urlparse(raw_stream).path or DEFAULT_STREAM_PATH
+                info = {
+                    "ok": True,
+                    "is_yihack": True,
+                    "name": (status_data or {}).get("name", "yi-hack"),
+                    "hostname": (status_data or {}).get("hostname", host),
+                    "model": (status_data or {}).get("model_suffix", ""),
+                    "fw": (status_data or {}).get("fw_version", ""),
+                    "snapshot": disc_snap,
+                    "stream": disc_stream,
+                }
+            else:
                 snap_url = resolve_cam_url(host, snap_param, "http")
                 try:
                     req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
@@ -323,7 +347,7 @@ class Handler(SimpleHTTPRequestHandler):
                         ctype = resp.headers.get("Content-Type", "")
                         head = resp.read(64)
                         if "image" in ctype.lower() or head.startswith((b"\xff\xd8", b"\x89PNG")):
-                            info = {"ok": True, "name": "camera", "hostname": host}
+                            info = {"ok": True, "is_yihack": False, "name": "camera", "hostname": host}
                         else:
                             info = {"ok": False, "error": f"Endpoint did not return an image ({ctype or 'unknown'})"}
                 except Exception as e:

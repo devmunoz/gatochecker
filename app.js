@@ -438,11 +438,32 @@ hostListEl.onclick = (e) => {
   }
 };
 
+async function probeYiHackPaths(host) {
+  const val = normalizeHost(host);
+  if (!val) return;
+  try {
+    const res = await fetch(`./validate?host=${encodeURIComponent(val)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.ok && data.is_yihack) {
+      if (newSnapInput && data.snapshot) newSnapInput.value = data.snapshot;
+      if (newStreamInput && data.stream) newStreamInput.value = data.stream;
+      if (addHostMsg) {
+        addHostMsg.className = 'field-msg ok';
+        const modelStr = data.model ? ` (${data.model})` : '';
+        addHostMsg.textContent = `✓ Yi-Hack detected: ${data.hostname || val}${modelStr} — paths auto-filled`;
+      }
+    }
+  } catch {}
+}
+
 async function addDraftHost(force = false) {
   const val = normalizeHost(newHostInput.value);
   if (!val) return;
-  const snapshot = String(newSnapInput?.value || '').trim() || DEFAULT_SNAP;
-  const stream = String(newStreamInput?.value || '').trim() || DEFAULT_STREAM;
+  let snapshot = String(newSnapInput?.value || '').trim() || DEFAULT_SNAP;
+  let stream = String(newStreamInput?.value || '').trim() || DEFAULT_STREAM;
+  const userModifiedSnap = snapshot !== DEFAULT_SNAP;
+  const userModifiedStream = stream !== DEFAULT_STREAM;
   if (draftHosts.some(c => c.host === val)) {
     if (addHostMsg) { addHostMsg.className = 'field-msg err'; addHostMsg.textContent = `⚠️ Camera ${val} already added`; }
     return;
@@ -463,10 +484,14 @@ async function addDraftHost(force = false) {
         }
         return;
       }
+      if (data.is_yihack) {
+        if (!userModifiedSnap && data.snapshot) snapshot = data.snapshot;
+        if (!userModifiedStream && data.stream) stream = data.stream;
+      }
       if (addHostMsg) {
         addHostMsg.className = 'field-msg ok';
         const modelStr = data.model ? ` (${data.model})` : '';
-        addHostMsg.textContent = `✓ ${data.hostname || val}${modelStr} - ${data.name || 'camera'}`;
+        addHostMsg.textContent = `✓ ${data.hostname || val}${modelStr} - ${data.name || 'camera'} (${snapshot} · ${stream})`;
       }
     } catch (e) {
       if (addHostMsg) {
@@ -489,7 +514,7 @@ async function addDraftHost(force = false) {
 
 document.getElementById('add-host').onclick = () => addDraftHost(false);
 newHostInput.onkeydown = (e) => { if (e.key === 'Enter') addDraftHost(false); };
-
+newHostInput.onblur = () => { if (newHostInput.value.trim()) probeYiHackPaths(newHostInput.value); };
 document.getElementById('open-admin').onclick = async () => {
   await loadConfig();
   cfgRefresh.value = String(config.refresh);
