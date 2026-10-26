@@ -52,9 +52,19 @@
   <div class="field">
     <label>Cameras (`config.json`)</label>
     <ul id="host-list"></ul>
-    <div class="add-row">
-      <input id="new-host" placeholder="e.g. 192.168.1.50 or camera.local">
-      <button type="button" id="add-host">+ Add</button>
+    <div class="add-cam-box">
+      <div class="add-row">
+        <input id="new-host" placeholder="Host / IP (e.g. 192.168.1.50 or cam.local)">
+        <button type="button" id="add-host">+ Add</button>
+      </div>
+      <div class="add-paths">
+        <label>Snapshot path / URL
+          <input id="new-snap" value="/cgi-bin/snapshot.sh?res=high" placeholder="/cgi-bin/snapshot.sh?res=high">
+        </label>
+        <label>RTSP path / URL
+          <input id="new-stream" value="/ch0_1.h264" placeholder="/ch0_1.h264 or /ch0_0.h264">
+        </label>
+      </div>
     </div>
     <div id="add-host-msg" class="field-msg"></div>
   </div>

@@ -11,7 +11,11 @@ const cfgRefresh = document.getElementById('cfg-refresh');
 const cfgConf = document.getElementById('cfg-conf');
 const hostListEl = document.getElementById('host-list');
 const newHostInput = document.getElementById('new-host');
+const newSnapInput = document.getElementById('new-snap');
+const newStreamInput = document.getElementById('new-stream');
 const addHostMsg = document.getElementById('add-host-msg');
+const DEFAULT_SNAP = '/cgi-bin/snapshot.sh?res=high';
+const DEFAULT_STREAM = '/ch0_1.h264';
 let timer = null;
 let config = { refresh: 10000, min_conf: 18, hosts: [] };
 let capsMap = {};
@@ -21,6 +25,21 @@ let initialized = false;
 const liveHosts = new Set();
 
 const normalizeHost = (h) => String(h).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+const normalizeCam = (item) => {
+  if (typeof item === 'string') {
+    const host = normalizeHost(item);
+    return host ? { host, snapshot: DEFAULT_SNAP, stream: DEFAULT_STREAM } : null;
+  }
+  if (item && typeof item === 'object') {
+    const host = normalizeHost(item.host || '');
+    if (!host) return null;
+    const snapshot = String(item.snapshot || '').trim() || DEFAULT_SNAP;
+    const stream = String(item.stream || '').trim() || DEFAULT_STREAM;
+    return { host, snapshot, stream };
+  }
+  return null;
+};
+const hostIndex = (h) => config.hosts.findIndex(c => c.host === h);
 
 async function loadConfig() {
   const [res, capsRes] = await Promise.all([
@@ -29,7 +48,7 @@ async function loadConfig() {
   ]);
   const raw = res.ok ? await res.json() : { refresh: 10000, min_conf: 18, hosts: [] };
   if (capsRes?.ok) capsMap = await capsRes.json();
-  const list = (Array.isArray(raw) ? raw : (raw.hosts ?? [])).map(normalizeHost).filter(Boolean);
+  const list = (Array.isArray(raw) ? raw : (raw.hosts ?? [])).map(normalizeCam).filter(Boolean);
   config = { refresh: raw.refresh ?? 10000, min_conf: raw.min_conf ?? 18, hosts: list };
   if (!initialized) {
     intervalSel.value = String(config.refresh);
@@ -74,7 +93,7 @@ function applyAutoSort() {
     const sb = getScore(cb);
     if (sb.count !== sa.count) return sb.count - sa.count;
     if (sa.count > 0 && sb.maxConf !== sa.maxConf) return sb.maxConf - sa.maxConf;
-    return config.hosts.indexOf(ca.dataset.host) - config.hosts.indexOf(cb.dataset.host);
+    return hostIndex(ca.dataset.host) - hostIndex(cb.dataset.host);
   });
   const curIds = cards.map(c => c.dataset.host).join(',');
   const newIds = sortedCards.map(c => c.dataset.host).join(',');
@@ -249,9 +268,10 @@ function renderBottomLinks(h) {
 async function refreshAll() {
   await loadConfig();
   const current = [...grid.querySelectorAll('.cam')].map(c => c.dataset.host);
-  if (JSON.stringify(config.hosts) !== JSON.stringify(current)) {
+  const nextNames = config.hosts.map(c => c.host);
+  if (JSON.stringify(nextNames) !== JSON.stringify(current)) {
     if (zoomDlg.open) zoomDlg.close();
-    grid.innerHTML = config.hosts.map(h => `
+    grid.innerHTML = nextNames.map(h => `
       <article class="cam" draggable="true" data-host="${h}">
         <div class="cam-bar">
           <div class="cam-links">
@@ -357,34 +377,56 @@ function enableDragSort(container, itemSel, onSorted) {
 }
 
 enableDragSort(grid, '.cam', (items) => {
-  const next = items.map(c => c.dataset.host);
-  if (JSON.stringify(next) !== JSON.stringify(config.hosts)) {
+  const nextNames = items.map(c => c.dataset.host);
+  const curNames = config.hosts.map(c => c.host);
+  if (JSON.stringify(nextNames) !== JSON.stringify(curNames)) {
     if (autosortCheckbox.checked) {
       autosortCheckbox.checked = false;
       localStorage.setItem('gatochecker_autosort', '0');
     }
+    const byHost = Object.fromEntries(config.hosts.map(c => [c.host, c]));
+    const next = nextNames.map(h => byHost[h] || normalizeCam(h)).filter(Boolean);
     saveConfig(config.refresh, config.min_conf, next);
   }
 });
 
 enableDragSort(hostListEl, 'li', (items) => {
-  draftHosts = items.map(li => li.dataset.host);
+  const byHost = Object.fromEntries(draftHosts.map(c => [c.host, c]));
+  draftHosts = items.map(li => byHost[li.dataset.host]).filter(Boolean);
   renderDraftHosts();
 });
 
 function renderDraftHosts() {
-  hostListEl.innerHTML = draftHosts.map((h, i) => `
-    <li draggable="true" data-host="${h}">
-      <span>⠿ ${h}</span>
-      <button type="button" data-rm="${i}" title="Remove">✕</button>
+  hostListEl.innerHTML = draftHosts.map((c, i) => `
+    <li draggable="true" data-host="${c.host}">
+      <div class="host-info">
+        <span>⠿ <strong>${c.host}</strong></span>
+        <span class="host-meta">📷 ${c.snapshot} · 🎥 ${c.stream}</span>
+      </div>
+      <div class="host-actions">
+        <button type="button" data-edit="${i}" title="Edit paths">✎</button>
+        <button type="button" data-rm="${i}" title="Remove">✕</button>
+      </div>
     </li>
   `).join('');
 }
 
 hostListEl.onclick = (e) => {
-  const idx = e.target.dataset.rm;
-  if (idx !== undefined) {
-    draftHosts.splice(Number(idx), 1);
+  const editBtn = e.target.closest('[data-edit]');
+  if (editBtn) {
+    const c = draftHosts.splice(Number(editBtn.dataset.edit), 1)[0];
+    if (c) {
+      newHostInput.value = c.host;
+      if (newSnapInput) newSnapInput.value = c.snapshot || DEFAULT_SNAP;
+      if (newStreamInput) newStreamInput.value = c.stream || DEFAULT_STREAM;
+      renderDraftHosts();
+      newHostInput.focus();
+    }
+    return;
+  }
+  const rmBtn = e.target.closest('[data-rm]');
+  if (rmBtn) {
+    draftHosts.splice(Number(rmBtn.dataset.rm), 1);
     renderDraftHosts();
   }
 };
@@ -392,7 +434,9 @@ hostListEl.onclick = (e) => {
 async function addDraftHost(force = false) {
   const val = normalizeHost(newHostInput.value);
   if (!val) return;
-  if (draftHosts.includes(val)) {
+  const snapshot = String(newSnapInput?.value || '').trim() || DEFAULT_SNAP;
+  const stream = String(newStreamInput?.value || '').trim() || DEFAULT_STREAM;
+  if (draftHosts.some(c => c.host === val)) {
     if (addHostMsg) { addHostMsg.className = 'field-msg err'; addHostMsg.textContent = `⚠️ Camera ${val} already added`; }
     return;
   }
@@ -402,7 +446,7 @@ async function addDraftHost(force = false) {
     addBtn.textContent = 'Checking…';
     if (addHostMsg) { addHostMsg.className = 'field-msg info'; addHostMsg.textContent = `Connecting to ${val}…`; }
     try {
-      const res = await fetch(`./validate?host=${encodeURIComponent(val)}`);
+      const res = await fetch(`./validate?host=${encodeURIComponent(val)}&snapshot=${encodeURIComponent(snapshot)}`);
       const data = await res.json();
       if (!data.ok) {
         if (addHostMsg) {
@@ -415,7 +459,7 @@ async function addDraftHost(force = false) {
       if (addHostMsg) {
         addHostMsg.className = 'field-msg ok';
         const modelStr = data.model ? ` (${data.model})` : '';
-        addHostMsg.textContent = `✓ ${data.hostname || val}${modelStr} - ${data.name || 'yi-hack'}`;
+        addHostMsg.textContent = `✓ ${data.hostname || val}${modelStr} - ${data.name || 'camera'}`;
       }
     } catch (e) {
       if (addHostMsg) {
@@ -429,8 +473,10 @@ async function addDraftHost(force = false) {
       addBtn.textContent = '+ Add';
     }
   }
-  draftHosts.push(val);
+  draftHosts.push({ host: val, snapshot, stream });
   newHostInput.value = '';
+  if (newSnapInput) newSnapInput.value = DEFAULT_SNAP;
+  if (newStreamInput) newStreamInput.value = DEFAULT_STREAM;
   renderDraftHosts();
 }
 
@@ -441,8 +487,10 @@ document.getElementById('open-admin').onclick = async () => {
   await loadConfig();
   cfgRefresh.value = String(config.refresh);
   if (cfgConf) cfgConf.value = String(config.min_conf);
+  if (newSnapInput) newSnapInput.value = DEFAULT_SNAP;
+  if (newStreamInput) newStreamInput.value = DEFAULT_STREAM;
   if (addHostMsg) { addHostMsg.className = 'field-msg'; addHostMsg.textContent = ''; }
-  draftHosts = [...config.hosts];
+  draftHosts = config.hosts.map(c => ({ ...c }));
   renderDraftHosts();
   adminDlg.showModal();
 };
@@ -475,7 +523,7 @@ autosortCheckbox.onchange = () => {
     applyAutoSort();
   } else {
     const cards = [...grid.querySelectorAll('.cam')];
-    cards.sort((a, b) => config.hosts.indexOf(a.dataset.host) - config.hosts.indexOf(b.dataset.host));
+    cards.sort((a, b) => hostIndex(a.dataset.host) - hostIndex(b.dataset.host));
     grid.append(...cards);
   }
 };

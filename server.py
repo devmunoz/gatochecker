@@ -179,6 +179,34 @@ def fetch_camera_snapshot(host):
         SNAP_CACHE[host] = (time.time(), raw, ctype)
         enqueue_ml(host, raw)
         return raw, ctype
+DEFAULT_SNAP_PATH = "/cgi-bin/snapshot.sh?res=high"
+DEFAULT_STREAM_PATH = "/ch0_1.h264"
+
+
+def normalize_cam_entry(item):
+    if isinstance(item, str):
+        h = item.strip()
+        return {"host": h, "snapshot": DEFAULT_SNAP_PATH, "stream": DEFAULT_STREAM_PATH} if h else None
+    if isinstance(item, dict):
+        h = str(item.get("host", "")).strip()
+        if not h:
+            return None
+        snap = str(item.get("snapshot", "")).strip() or DEFAULT_SNAP_PATH
+        stream = str(item.get("stream", "")).strip() or DEFAULT_STREAM_PATH
+        return {"host": h, "snapshot": snap, "stream": stream}
+    return None
+
+
+def resolve_cam_url(host, val, scheme="http"):
+    val = (val or "").strip()
+    if val.startswith(("http://", "https://", "rtsp://", "rtsps://")):
+        return val
+    base_host = urlparse(f"http://{host}").hostname or host if scheme == "rtsp" else host
+    if not val.startswith("/"):
+        val = "/" + val
+    return f"{scheme}://{base_host}{val}"
+
+
 def get_config():
     target = get_config_file()
     if not target.exists() and LEGACY_HOSTS_FILE.exists() and not LEGACY_HOSTS_FILE.is_dir():
@@ -187,53 +215,72 @@ def get_config():
         return {"refresh": 10000, "min_conf": 18, "hosts": []}
     try:
         raw = json.loads(target.read_text())
+        raw_list = raw if isinstance(raw, list) else raw.get("hosts", [])
+        hosts = [c for c in (normalize_cam_entry(x) for x in raw_list) if c]
         if isinstance(raw, list):
-            return {"refresh": 10000, "min_conf": 18, "hosts": raw}
+            return {"refresh": 10000, "min_conf": 18, "hosts": hosts}
         return {
             "refresh": int(raw.get("refresh", 10000)),
             "min_conf": int(raw.get("min_conf", 18)),
-            "hosts": raw.get("hosts", []),
+            "hosts": hosts,
         }
     except Exception:
         return {"refresh": 10000, "min_conf": 18, "hosts": []}
 
+
 def get_hosts():
-    return get_config()["hosts"]
+    return [c["host"] for c in get_config()["hosts"]]
+
+
+def get_cam_entry(host):
+    for c in get_config()["hosts"]:
+        if c["host"] == host:
+            return c
+    return {"host": host, "snapshot": DEFAULT_SNAP_PATH, "stream": DEFAULT_STREAM_PATH}
+
 
 def get_host_caps(host):
-    if host in CAPS_CACHE:
-        return CAPS_CACHE[host]
+    cam = get_cam_entry(host)
+    cache_key = (host, cam["snapshot"], cam["stream"])
+    if cache_key in CAPS_CACHE:
+        return CAPS_CACHE[cache_key]
     rtsp_host = urlparse(f"http://{host}").hostname or host
-    try:
-        req = Request(f"http://{host}/cgi-bin/links.sh", headers={"User-Agent": "GatoChecker/1.0"})
-        with urlopen(req, timeout=5) as resp:
-            links = json.loads(resp.read().decode())
-        hi_snap = f"http://{host}/cgi-bin/snapshot.sh?res=high" if "high_res_snapshot" in links else None
-        lo_snap = f"http://{host}/cgi-bin/snapshot.sh?res=low" if "low_res_snapshot" in links else None
-        hi_path = urlparse(links["high_res_stream"]).path if "high_res_stream" in links else None
-        lo_path = urlparse(links["low_res_stream"]).path if "low_res_stream" in links else None
-        hi_stream = f"rtsp://{rtsp_host}{hi_path}" if hi_path else None
-        lo_stream = f"rtsp://{rtsp_host}{lo_path}" if lo_path else None
-        caps = {
-            "high_res_snapshot": hi_snap,
-            "low_res_snapshot": lo_snap,
-            "high_res_stream": hi_stream,
-            "low_res_stream": lo_stream,
-            "default_snapshot": hi_snap or lo_snap or f"http://{host}/cgi-bin/snapshot.sh?res=high",
-            "default_stream": lo_stream or hi_stream or f"rtsp://{rtsp_host}/ch0_0.h264",
-        }
-        CAPS_CACHE[host] = caps
-        return caps
-    except Exception:
-        return {
-            "high_res_snapshot": f"http://{host}/cgi-bin/snapshot.sh?res=high",
-            "low_res_snapshot": None,
-            "high_res_stream": f"rtsp://{rtsp_host}/ch0_0.h264",
-            "low_res_stream": None,
-            "default_snapshot": f"http://{host}/cgi-bin/snapshot.sh?res=high",
-            "default_stream": f"rtsp://{rtsp_host}/ch0_0.h264",
-        }
-
+    custom_snap = resolve_cam_url(host, cam["snapshot"], "http")
+    custom_stream = resolve_cam_url(host, cam["stream"], "rtsp")
+    is_default_yi = (cam["snapshot"] == DEFAULT_SNAP_PATH and cam["stream"] in (DEFAULT_STREAM_PATH, "/ch0_0.h264"))
+    if is_default_yi:
+        try:
+            req = Request(f"http://{host}/cgi-bin/links.sh", headers={"User-Agent": "GatoChecker/1.0"})
+            with urlopen(req, timeout=4) as resp:
+                links = json.loads(resp.read().decode())
+            hi_snap = f"http://{host}/cgi-bin/snapshot.sh?res=high" if "high_res_snapshot" in links else None
+            lo_snap = f"http://{host}/cgi-bin/snapshot.sh?res=low" if "low_res_snapshot" in links else None
+            hi_path = urlparse(links["high_res_stream"]).path if "high_res_stream" in links else None
+            lo_path = urlparse(links["low_res_stream"]).path if "low_res_stream" in links else None
+            hi_stream = f"rtsp://{rtsp_host}{hi_path}" if hi_path else None
+            lo_stream = f"rtsp://{rtsp_host}{lo_path}" if lo_path else None
+            caps = {
+                "high_res_snapshot": hi_snap or custom_snap,
+                "low_res_snapshot": lo_snap,
+                "high_res_stream": hi_stream or custom_stream,
+                "low_res_stream": lo_stream,
+                "default_snapshot": custom_snap,
+                "default_stream": custom_stream,
+            }
+            CAPS_CACHE[cache_key] = caps
+            return caps
+        except Exception:
+            pass
+    caps = {
+        "high_res_snapshot": custom_snap,
+        "low_res_snapshot": None,
+        "high_res_stream": custom_stream,
+        "low_res_stream": None,
+        "default_snapshot": custom_snap,
+        "default_stream": custom_stream,
+    }
+    CAPS_CACHE[cache_key] = caps
+    return caps
 class Handler(SimpleHTTPRequestHandler):
     def _send_json(self, payload, status=200):
         try:
@@ -253,6 +300,7 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == "/validate":
             params = parse_qs(parsed.query)
             host = params.get("host", [""])[0].strip()
+            snap_param = params.get("snapshot", [DEFAULT_SNAP_PATH])[0].strip() or DEFAULT_SNAP_PATH
             if not host:
                 return self._send_json({"ok": False, "error": "Host is required"}, status=400)
             info = {}
@@ -268,14 +316,16 @@ class Handler(SimpleHTTPRequestHandler):
                         "fw": data.get("fw_version", ""),
                     }
             except Exception:
+                snap_url = resolve_cam_url(host, snap_param, "http")
                 try:
-                    req = Request(f"http://{host}/cgi-bin/links.sh", headers={"User-Agent": "GatoChecker/1.0"})
-                    with urlopen(req, timeout=3.5) as resp:
-                        data = json.loads(resp.read().decode())
-                        if "high_res_snapshot" in data or "low_res_stream" in data:
-                            info = {"ok": True, "name": "yi-hack", "hostname": host}
+                    req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
+                    with urlopen(req, timeout=5) as resp:
+                        ctype = resp.headers.get("Content-Type", "")
+                        head = resp.read(64)
+                        if "image" in ctype.lower() or head.startswith((b"\xff\xd8", b"\x89PNG")):
+                            info = {"ok": True, "name": "camera", "hostname": host}
                         else:
-                            info = {"ok": False, "error": "Not a Yi-Hack camera (unexpected response)"}
+                            info = {"ok": False, "error": f"Endpoint did not return an image ({ctype or 'unknown'})"}
                 except Exception as e:
                     info = {"ok": False, "error": f"Unreachable ({e})"}
             return self._send_json(info)
@@ -351,12 +401,13 @@ class Handler(SimpleHTTPRequestHandler):
             raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             data = json.loads(raw)
             assert isinstance(data, dict) and isinstance(data.get("hosts"), list)
-            hosts = [str(h).strip() for h in data["hosts"] if str(h).strip()]
+            hosts = [c for c in (normalize_cam_entry(h) for h in data["hosts"]) if c]
             refresh = int(data.get("refresh", 10000))
             min_conf = max(5, min(95, int(data.get("min_conf", 18))))
         except Exception:
             return self.send_error(400, "Invalid config")
 
+        CAPS_CACHE.clear()
         target = get_config_file()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
