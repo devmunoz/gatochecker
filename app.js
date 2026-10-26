@@ -25,6 +25,7 @@ let initialized = false;
 const liveHosts = new Set();
 
 const normalizeHost = (h) => String(h).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+const cleanSnap = (s) => String(s || '').replace(/([?&])watermark=[^&]*(&|$)/i, (m, p1, p2) => p2 ? p1 : '').replace(/\?$/, '');
 const normalizeCam = (item) => {
   if (typeof item === 'string') {
     const host = normalizeHost(item);
@@ -33,7 +34,8 @@ const normalizeCam = (item) => {
   if (item && typeof item === 'object') {
     const host = normalizeHost(item.host || '');
     if (!host) return null;
-    const snapshot = String(item.snapshot || '').trim() || DEFAULT_SNAP;
+    const rawSnap = String(item.snapshot || '').trim() || DEFAULT_SNAP;
+    const snapshot = cleanSnap(rawSnap) || DEFAULT_SNAP;
     const stream = String(item.stream || '').trim() || DEFAULT_STREAM;
     return { host, snapshot, stream };
   }
@@ -406,13 +408,16 @@ enableDragSort(hostListEl, 'li', (items) => {
 function renderDraftHosts() {
   hostListEl.innerHTML = draftHosts.map((c, i) => `
     <li draggable="true" data-host="${c.host}">
-      <div class="host-info">
-        <span>⠿ <strong>${c.host}</strong></span>
-        <span class="host-meta">📷 ${c.snapshot} · 🎥 ${c.stream}</span>
+      <div class="host-header">
+        <span class="host-title">⠿ <strong>${c.host}</strong></span>
+        <div class="host-actions">
+          <button type="button" data-edit="${i}" title="Edit paths">✎</button>
+          <button type="button" data-rm="${i}" title="Remove">✕</button>
+        </div>
       </div>
-      <div class="host-actions">
-        <button type="button" data-edit="${i}" title="Edit paths">✎</button>
-        <button type="button" data-rm="${i}" title="Remove">✕</button>
+      <div class="host-settings">
+        <div class="host-setting-row"><span class="setting-label">📷 Snapshot:</span> <code class="setting-val">${c.snapshot}</code></div>
+        <div class="host-setting-row"><span class="setting-label">🎥 Stream:</span> <code class="setting-val">${c.stream}</code></div>
       </div>
     </li>
   `).join('');
@@ -460,7 +465,7 @@ async function probeYiHackPaths(host) {
 async function addDraftHost(force = false) {
   const val = normalizeHost(newHostInput.value);
   if (!val) return;
-  let snapshot = String(newSnapInput?.value || '').trim() || DEFAULT_SNAP;
+  let snapshot = cleanSnap(String(newSnapInput?.value || '').trim()) || DEFAULT_SNAP;
   let stream = String(newStreamInput?.value || '').trim() || DEFAULT_STREAM;
   const userModifiedSnap = snapshot !== DEFAULT_SNAP;
   const userModifiedStream = stream !== DEFAULT_STREAM;

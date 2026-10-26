@@ -10,7 +10,7 @@ import subprocess
 import sys
 import threading
 import time
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 DEBUG = "--debug" in sys.argv or "-v" in sys.argv or os.environ.get("DEBUG") in ("1", "true", "True")
@@ -182,6 +182,18 @@ def fetch_camera_snapshot(host):
 DEFAULT_SNAP_PATH = "/cgi-bin/snapshot.sh?res=high"
 DEFAULT_STREAM_PATH = "/ch0_1.h264"
 
+def clean_snap_path(path):
+    if not path:
+        return DEFAULT_SNAP_PATH
+    ps = urlparse(path)
+    if "watermark" not in ps.query.lower():
+        return path
+    pairs = [(k, v) for k, v in parse_qsl(ps.query, keep_blank_values=True) if k.lower() != "watermark"]
+    q = urlencode(pairs)
+    prefix = f"{ps.scheme}://{ps.netloc}" if ps.netloc else ""
+    base = f"{prefix}{ps.path}" if (prefix or ps.path) else path.split("?")[0]
+    return f"{base}?{q}" if q else base
+
 
 def normalize_cam_entry(item):
     if isinstance(item, str):
@@ -191,7 +203,8 @@ def normalize_cam_entry(item):
         h = str(item.get("host", "")).strip()
         if not h:
             return None
-        snap = str(item.get("snapshot", "")).strip() or DEFAULT_SNAP_PATH
+        raw_snap = str(item.get("snapshot", "")).strip() or DEFAULT_SNAP_PATH
+        snap = clean_snap_path(raw_snap)
         stream = str(item.get("stream", "")).strip() or DEFAULT_STREAM_PATH
         return {"host": h, "snapshot": snap, "stream": stream}
     return None
@@ -325,7 +338,7 @@ class Handler(SimpleHTTPRequestHandler):
                     raw_snap = links_data.get("high_res_snapshot") or links_data.get("low_res_snapshot")
                     if raw_snap:
                         ps = urlparse(raw_snap)
-                        disc_snap = f"{ps.path}?{ps.query}" if ps.query else (ps.path or DEFAULT_SNAP_PATH)
+                        disc_snap = clean_snap_path(f"{ps.path}?{ps.query}" if ps.query else (ps.path or DEFAULT_SNAP_PATH))
                     raw_stream = links_data.get("low_res_stream") or links_data.get("high_res_stream")
                     if raw_stream:
                         disc_stream = urlparse(raw_stream).path or DEFAULT_STREAM_PATH
@@ -339,8 +352,6 @@ class Handler(SimpleHTTPRequestHandler):
                     "snapshot": disc_snap,
                     "stream": disc_stream,
                 }
-            else:
-                snap_url = resolve_cam_url(host, snap_param, "http")
                 try:
                     req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
                     with urlopen(req, timeout=5) as resp:
