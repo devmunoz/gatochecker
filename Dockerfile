@@ -21,8 +21,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
         (pip install --no-cache-dir torch torchvision --index-url "$TORCH_INDEX" || pip install --no-cache-dir torch torchvision); \
     fi && \
     pip install --no-cache-dir -r requirements.txt
-# Pre-download default vision transformer weights so container works offline
-RUN python3 -c "from ultralytics import RTDETR; RTDETR('rtdetr-l.pt')"
+# Pre-download default weights (yolo11s.pt for CPU / Intel N100, rtdetr-l.pt for GPU) so container works offline
+RUN python3 -c "from ultralytics import YOLO, RTDETR; YOLO('yolo11s.pt'); RTDETR('rtdetr-l.pt')"
 
 # Copy application files
 COPY server.py index.html style.css app.js ./

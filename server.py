@@ -21,12 +21,16 @@ def get_config_file():
     return p
 
 LEGACY_HOSTS_FILE = Path(__file__).with_name("hosts.json")
-MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", "rtdetr-l.pt"))
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 CAPS_CACHE = {}
 DETECTIONS = {}
+SNAP_CACHE = {}
+HOST_LOCKS = {}
+HOST_LOCKS_GUARD = threading.Lock()
 YOLO_LOCK = threading.Lock()
 YOLO_MODEL = None
+ML_QUEUE = {}
+ML_COND = threading.Condition()
 
 try:
     from PIL import Image
@@ -48,7 +52,8 @@ except ImportError:
     RTDETR = None
     DEVICE = "cpu"
 
-
+DEFAULT_MODEL = "yolo11s.pt" if DEVICE == "cpu" else "rtdetr-l.pt"
+MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", DEFAULT_MODEL))
 def _overlap(b1, b2):
     x1, y1 = max(b1[0], b2[0]), max(b1[1], b2[1])
     x2, y2 = min(b1[0] + b1[2], b2[0] + b2[2]), min(b1[1] + b1[3], b2[1] + b2[3])
@@ -128,6 +133,52 @@ def detect_cats(raw_bytes, host=""):
         sys.stderr.write(f"[ML {host}] {len(cats)} cat(s) [{cat_str}] in {elapsed}ms ({DEVICE}){near_str}{other_str}\n")
     return cats
 
+
+def enqueue_ml(host, raw_bytes):
+    with ML_COND:
+        ML_QUEUE[host] = raw_bytes
+        prev = DETECTIONS.get(host, {"cat": False, "cats": []})
+        DETECTIONS[host] = {**prev, "pending": True}
+        ML_COND.notify()
+
+
+def _ml_worker():
+    while True:
+        with ML_COND:
+            while not ML_QUEUE:
+                ML_COND.wait()
+            host = next(iter(ML_QUEUE))
+            raw = ML_QUEUE.pop(host)
+        try:
+            cats = detect_cats(raw, host=host)
+            with ML_COND:
+                still_queued = host in ML_QUEUE
+            DETECTIONS[host] = {"cat": bool(cats), "cats": cats, "pending": still_queued, "ts": int(time.time() * 1000)}
+        except Exception as e:
+            if DEBUG:
+                sys.stderr.write(f"[ML {host}] error: {e}\n")
+            DETECTIONS[host] = {**DETECTIONS.get(host, {"cat": False, "cats": []}), "pending": False}
+
+
+threading.Thread(target=_ml_worker, daemon=True).start()
+
+
+def fetch_camera_snapshot(host):
+    with HOST_LOCKS_GUARD:
+        lock = HOST_LOCKS.setdefault(host, threading.Lock())
+    with lock:
+        now = time.time()
+        cached = SNAP_CACHE.get(host)
+        if cached and (now - cached[0]) < 2.0:
+            return cached[1], cached[2]
+        snap_url = get_host_caps(host)["default_snapshot"]
+        req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
+        with urlopen(req, timeout=15) as resp:
+            raw = resp.read()
+            ctype = resp.headers.get("Content-Type", "image/jpeg")
+        SNAP_CACHE[host] = (time.time(), raw, ctype)
+        enqueue_ml(host, raw)
+        return raw, ctype
 def get_config():
     target = get_config_file()
     if not target.exists() and LEGACY_HOSTS_FILE.exists() and not LEGACY_HOSTS_FILE.is_dir():
@@ -184,21 +235,26 @@ def get_host_caps(host):
         }
 
 class Handler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-        parsed = urlparse(self.path)
-        if parsed.path in ("/config.json", "/hosts.json"):
-            self.send_response(200)
+    def _send_json(self, payload, status=200):
+        try:
+            body = json.dumps(payload).encode() if not isinstance(payload, bytes) else payload
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            return self.wfile.write(json.dumps(get_config()).encode())
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionError):
+            pass
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path in ("/config.json", "/hosts.json"):
+            return self._send_json(get_config())
         if parsed.path == "/validate":
             params = parse_qs(parsed.query)
             host = params.get("host", [""])[0].strip()
             if not host:
-                self.send_response(400)
-                self.end_headers()
-                return self.wfile.write(b'{"ok":false,"error":"Host is required"}')
+                return self._send_json({"ok": False, "error": "Host is required"}, status=400)
             info = {}
             try:
                 req = Request(f"http://{host}/cgi-bin/status.json", headers={"User-Agent": "GatoChecker/1.0"})
@@ -222,47 +278,35 @@ class Handler(SimpleHTTPRequestHandler):
                             info = {"ok": False, "error": "Not a Yi-Hack camera (unexpected response)"}
                 except Exception as e:
                     info = {"ok": False, "error": f"Unreachable ({e})"}
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return self.wfile.write(json.dumps(info).encode())
+            return self._send_json(info)
         if parsed.path == "/capabilities":
             hosts = get_hosts()
             with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
                 caps = dict(zip(hosts, pool.map(get_host_caps, hosts)))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return self.wfile.write(json.dumps(caps).encode())
+            return self._send_json(caps)
         if parsed.path == "/detections":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return self.wfile.write(json.dumps(DETECTIONS).encode())
+            return self._send_json(DETECTIONS)
         if parsed.path == "/snapshot":
             params = parse_qs(parsed.query)
             host = params.get("host", [""])[0]
             if host not in get_hosts():
                 return self.send_error(403, "Unknown host")
-            snap_url = get_host_caps(host)["default_snapshot"]
             try:
-                req = Request(snap_url, headers={"User-Agent": "GatoChecker/1.0"})
-                with urlopen(req, timeout=15) as resp:
-                    raw = resp.read()
-                    ctype = resp.headers.get("Content-Type", "image/jpeg")
+                raw, ctype = fetch_camera_snapshot(host)
             except Exception as e:
-                sys.stderr.write(f"Snapshot error for {host} ({snap_url}): {e}\n")
-                return self.send_error(502, f"Camera unreachable: {e}")
-            cats = detect_cats(raw, host=host)
-            DETECTIONS[host] = {"cat": bool(cats), "cats": cats}
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            return self.wfile.write(raw)
+                sys.stderr.write(f"Snapshot error for {host}: {e}\n")
+                try:
+                    return self.send_error(502, f"Camera unreachable: {e}")
+                except (BrokenPipeError, ConnectionError):
+                    return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(raw)
+            except (BrokenPipeError, ConnectionError):
+                return
         if parsed.path != "/stream":
             return super().do_GET()
         params = parse_qs(parsed.query)
@@ -316,14 +360,11 @@ class Handler(SimpleHTTPRequestHandler):
         target = get_config_file()
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"ok":true}')
+        return self._send_json({"ok": True})
 
 
 if __name__ == "__main__":
     port_args = [a for a in sys.argv[1:] if not a.startswith("-")]
     port = int(port_args[0]) if port_args else 8000
-    print(f"GatoChecker listening on http://127.0.0.1:{port}" + (" [ML DEBUG ON]" if DEBUG else ""))
+    print(f"GatoChecker listening on http://127.0.0.1:{port} [model={MODEL_FILE.name} device={DEVICE}]" + (" [ML DEBUG ON]" if DEBUG else ""))
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()

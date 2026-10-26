@@ -81,42 +81,62 @@ function applyAutoSort() {
   if (curIds !== newIds) grid.append(...sortedCards);
 }
 
-async function updateDetections(host, card, img) {
+let detPollTimer = null;
+
+function renderCardDetections(card) {
+  const host = card.dataset.host;
+  const img = card.querySelector('img') || (zoomDlg.open && zoomDlg.dataset.host === host ? zoomedImg : null);
+  const det = latestDetections[host];
+  const cats = (!liveHosts.has(host) && det?.cats) ? det.cats : [];
+  card.classList.toggle('has-cat', cats.length > 0);
+  const badge = card.querySelector('.cat-badge');
+  if (badge) {
+    if (cats.length) {
+      const maxConf = Math.round(Math.max(...cats.map(c => c.conf)) * 100);
+      badge.textContent = `🐱 ${cats.length > 1 ? `${cats.length} · ` : ''}${maxConf}%`;
+    } else {
+      badge.textContent = '';
+    }
+  }
+  const boxesEl = card.querySelector('.cat-boxes');
+  if (!boxesEl) return;
+  let ox = 0, oy = 0, sw = 100, sh = 100;
+  if (img?.naturalWidth && img?.naturalHeight) {
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    const viewRatio = 16 / 9;
+    if (imgRatio < viewRatio) {
+      sw = (imgRatio / viewRatio) * 100;
+      ox = (100 - sw) / 2;
+    } else if (imgRatio > viewRatio) {
+      sh = (viewRatio / imgRatio) * 100;
+      oy = (100 - sh) / 2;
+    }
+  }
+  boxesEl.innerHTML = cats.map(c => {
+    const [x, y, w, h] = c.box;
+    const top = oy + y * sh;
+    const cls = top < 7 ? 'label-below' : 'label-above';
+    return `<div class="cat-box" style="left:${ox + x * sw}%;top:${top}%;width:${w * sw}%;height:${h * sh}%"><span class="${cls}">🐱 ${Math.round(c.conf * 100)}%</span></div>`;
+  }).join('');
+  if (zoomDlg.open && zoomDlg.dataset.host === host) {
+    syncZoomDetections(host, img);
+  }
+}
+
+async function updateDetections() {
   try {
     const res = await fetch('./detections', { cache: 'no-store' });
     if (!res.ok) return;
     latestDetections = await res.json();
-    const det = latestDetections[host];
-    const cats = (!liveHosts.has(host) && det?.cats) ? det.cats : [];
-    const badge = card.querySelector('.cat-badge');
-    if (badge && cats.length) {
-      const maxConf = Math.round(Math.max(...cats.map(c => c.conf)) * 100);
-      badge.textContent = `🐱 ${cats.length > 1 ? `${cats.length} · ` : ''}${maxConf}%`;
-    }
-    const boxesEl = card.querySelector('.cat-boxes');
-    if (!boxesEl) return;
-    let ox = 0, oy = 0, sw = 100, sh = 100;
-    if (img?.naturalWidth && img?.naturalHeight) {
-      const imgRatio = img.naturalWidth / img.naturalHeight;
-      const viewRatio = 16 / 9;
-      if (imgRatio < viewRatio) {
-        sw = (imgRatio / viewRatio) * 100;
-        ox = (100 - sw) / 2;
-      } else if (imgRatio > viewRatio) {
-        sh = (viewRatio / imgRatio) * 100;
-        oy = (100 - sh) / 2;
-      }
-    }
-    boxesEl.innerHTML = cats.map(c => {
-      const [x, y, w, h] = c.box;
-      const top = oy + y * sh;
-      const cls = top < 7 ? 'label-below' : 'label-above';
-      return `<div class="cat-box" style="left:${ox + x * sw}%;top:${top}%;width:${w * sw}%;height:${h * sh}%"><span class="${cls}">🐱 ${Math.round(c.conf * 100)}%</span></div>`;
-    }).join('');
-    if (zoomDlg.open && zoomDlg.dataset.host === host) {
-      syncZoomDetections(host, img);
+    for (const card of grid.querySelectorAll('.cam')) {
+      renderCardDetections(card);
     }
     applyAutoSort();
+    const anyPending = Object.values(latestDetections).some(d => d?.pending);
+    clearTimeout(detPollTimer);
+    if (anyPending) {
+      detPollTimer = setTimeout(updateDetections, 1000);
+    }
   } catch {}
 }
 
@@ -177,16 +197,13 @@ function applyCardSource(card, t = Date.now()) {
     return;
   }
 
-  img.onload = null;
-  img.onerror = null;
   const url = `/snapshot?host=${encodeURIComponent(h)}&t=${t}`;
   if (status) {
     status.className = 'status';
     status.textContent = 'Updating…';
   }
-  const loader = new Image();
-  const timeoutId = setTimeout(() => {
-    loader.src = '';
+  clearTimeout(card._snapTimeout);
+  card._snapTimeout = setTimeout(() => {
     if (liveHosts.has(h)) return;
     card.classList.add('offline');
     card.classList.remove('has-cat');
@@ -195,19 +212,18 @@ function applyCardSource(card, t = Date.now()) {
       status.textContent = 'Offline';
     }
   }, 16000);
-  loader.onload = () => {
-    clearTimeout(timeoutId);
+  img.onload = () => {
+    clearTimeout(card._snapTimeout);
     if (liveHosts.has(h)) return;
     card.classList.remove('offline');
-    img.src = url;
     if (status) {
       status.className = 'status ok';
       status.textContent = new Date().toLocaleTimeString();
     }
-    updateDetections(h, card, loader);
+    updateDetections();
   };
-  loader.onerror = () => {
-    clearTimeout(timeoutId);
+  img.onerror = () => {
+    clearTimeout(card._snapTimeout);
     if (liveHosts.has(h)) return;
     card.classList.add('offline');
     card.classList.remove('has-cat');
@@ -216,7 +232,7 @@ function applyCardSource(card, t = Date.now()) {
       status.textContent = 'Offline';
     }
   };
-  loader.src = url;
+  img.src = url;
 }
 
 function renderBottomLinks(h) {
