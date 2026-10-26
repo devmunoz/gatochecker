@@ -256,12 +256,14 @@ function applyCardSource(card, t = Date.now()) {
 
 function renderBottomLinks(h) {
   const c = capsMap[h] || {};
+  const hasDualStream = Boolean(c.high_res_stream && c.low_res_stream);
+  const hasDualSnap = Boolean(c.high_res_snapshot && c.low_res_snapshot);
   return [
-    c.high_res_stream ? `<a class="icon-btn" href="${c.high_res_stream}" title="Open High-Res RTSP stream">🎥<sub>+</sub></a>` : '',
+    c.high_res_stream ? `<a class="icon-btn" href="${c.high_res_stream}" title="${hasDualStream ? 'Open High-Res RTSP stream' : 'Open RTSP stream'}">🎥${hasDualStream ? '<sub>+</sub>' : ''}</a>` : '',
     c.low_res_stream ? `<a class="icon-btn" href="${c.low_res_stream}" title="Open Low-Res RTSP stream">🎥</a>` : '',
-    c.high_res_snapshot ? `<a class="icon-btn" href="${c.high_res_snapshot}" target="_blank" rel="noopener" title="Open High-Res Snapshot in new tab">📷<sub>+</sub></a>` : '',
+    c.high_res_snapshot ? `<a class="icon-btn" href="${c.high_res_snapshot}" target="_blank" rel="noopener" title="${hasDualSnap ? 'Open High-Res Snapshot in new tab' : 'Open Snapshot in new tab'}">📷${hasDualSnap ? '<sub>+</sub>' : ''}</a>` : '',
     c.low_res_snapshot ? `<a class="icon-btn" href="${c.low_res_snapshot}" target="_blank" rel="noopener" title="Open Low-Res Snapshot in new tab">📷</a>` : '',
-    `<a class="icon-btn" href="http://${h}" target="_blank" rel="noopener" title="Open Yi-Hack web interface">⚙️</a>`,
+    `<a class="icon-btn" href="http://${h}" target="_blank" rel="noopener" title="Open camera web interface">⚙️</a>`,
   ].filter(Boolean).join('');
 }
 
@@ -294,6 +296,11 @@ async function refreshAll() {
         </div>
       </article>
     `).join('');
+  } else {
+    for (const card of grid.querySelectorAll('.cam')) {
+      const footer = card.querySelector('.cam-footer');
+      if (footer) footer.innerHTML = renderBottomLinks(card.dataset.host);
+    }
   }
 
   const t = Date.now();

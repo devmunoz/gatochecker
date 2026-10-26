@@ -202,7 +202,7 @@ def resolve_cam_url(host, val, scheme="http"):
     if val.startswith(("http://", "https://", "rtsp://", "rtsps://")):
         return val
     base_host = urlparse(f"http://{host}").hostname or host if scheme == "rtsp" else host
-    if not val.startswith("/"):
+    if not val.startswith(("/", ":")):
         val = "/" + val
     return f"{scheme}://{base_host}{val}"
 
