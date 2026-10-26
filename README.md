@@ -33,7 +33,7 @@ docker compose up -d
 Or standalone `docker run`:
 ```sh
 docker build -t gatochecker .
-docker run -d --name gatochecker -p 8000:8000 -v $(pwd)/config.json:/app/config.json gatochecker
+docker run -d --name gatochecker -p 8000:8000 -v $(pwd)/data:/app/data -e GATO_CONFIG=/app/data/config.json gatochecker
 ```
 
 ### Option B: Local Python (Mac / Linux)

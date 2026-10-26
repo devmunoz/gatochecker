@@ -14,7 +14,12 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
 DEBUG = "--debug" in sys.argv or "-v" in sys.argv or os.environ.get("DEBUG") in ("1", "true", "True")
-CONFIG_FILE = Path(os.environ.get("GATO_CONFIG", Path(__file__).with_name("config.json")))
+def get_config_file():
+    p = Path(os.environ.get("GATO_CONFIG", Path(__file__).with_name("config.json")))
+    if p.is_dir():
+        return p / "config.json"
+    return p
+
 LEGACY_HOSTS_FILE = Path(__file__).with_name("hosts.json")
 MODEL_FILE = Path(__file__).with_name(os.environ.get("YOLO_MODEL", "rtdetr-l.pt"))
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -124,10 +129,10 @@ def detect_cats(raw_bytes, host=""):
     return cats
 
 def get_config():
-    target = CONFIG_FILE
-    if not target.exists() and LEGACY_HOSTS_FILE.exists():
+    target = get_config_file()
+    if not target.exists() and LEGACY_HOSTS_FILE.exists() and not LEGACY_HOSTS_FILE.is_dir():
         target = LEGACY_HOSTS_FILE
-    if not target.exists():
+    if not target.exists() or target.is_dir():
         return {"refresh": 10000, "min_conf": 18, "hosts": []}
     try:
         raw = json.loads(target.read_text())
@@ -308,7 +313,9 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             return self.send_error(400, "Invalid config")
 
-        CONFIG_FILE.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
+        target = get_config_file()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"refresh": refresh, "min_conf": min_conf, "hosts": hosts}, indent=2) + "\n")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
